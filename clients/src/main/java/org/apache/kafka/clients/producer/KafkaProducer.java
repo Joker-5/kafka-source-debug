@@ -238,25 +238,49 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     public static final String NETWORK_THREAD_PREFIX = "kafka-producer-network-thread";
     public static final String PRODUCER_METRIC_GROUP_NAME = "producer-metrics";
 
+    // 客户端id。在创建KafkaProducer时可通过client.id定义clientId
+    // 如果未指定，则默认使用producer-seq，seq在进程内递增
+    // 强烈建议客户端显式指定clientId
     private final String clientId;
     // Visible for testing
+    // 度量监控的相关存储容器，例如：消息体大小、发送耗时等与监控相关等指标
     final Metrics metrics;
+    // 分区负载均衡算法，通过参数partitioner.class指定
     private final Partitioner partitioner;
+    // 调用send方法发送的最大请求大小，包括key、消息体序列化后的消息总大小都不能超过该值
+    // 通过参数max.request.size来设置
     private final int maxRequestSize;
+    // 生产者缓存所占内存的总大小，通过参数buffer.memory来设置
     private final long totalMemorySize;
+    // 元数据信息，例如topic的路由信息，由kafka自动更新
     private final ProducerMetadata metadata;
+    // 消息记录积累器
     private final RecordAccumulator accumulator;
+    // 用于封装消息发送的逻辑，即向broker发送消息的处理逻辑
     private final Sender sender;
+    // 用于消息发送的后台线程，是一个独立的线程，在内部使用Sender向broker发送消息
     private final Thread ioThread;
+    // 压缩类型，默认不启用压缩，可通过参数compression.type设置
+    // 可选值由有：none、gzip、snappy、lz4、zstd
     private final CompressionType compressionType;
+    // 错误信息收集器，可当成一个metrics，用于监控
     private final Sensor errors;
+    // 用于获取系统时间或者线程睡眠etc.
     private final Time time;
+    // 对消息的key进行序列化
     private final Serializer<K> keySerializer;
+    // 对消息对value序列化
     private final Serializer<V> valueSerializer;
+    // 生产者的配置信息
     private final ProducerConfig producerConfig;
+    // 最大阻塞时间，当生产者使用的缓存已经达到规定值后，此时消息发送会阻塞
+    // 通过参数max.block.ms来设置最长可以等待多久
     private final long maxBlockTimeMs;
+    // 生产者端的拦截器，在消息发送之前可以进行一些定制化处理
     private final ProducerInterceptors<K, V> interceptors;
+    // 维护api版本的相关metadata，此类只能在kafka内部使用
     private final ApiVersions apiVersions;
+    // kafka 消息事务管理器
     private final TransactionManager transactionManager;
 
     /**

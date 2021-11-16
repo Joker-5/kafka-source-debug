@@ -54,3 +54,5 @@ include 'clients',
     'streams:upgrade-system-tests-28',
     'tools',
     'trogdor'
+include 'kafka-test'
+
