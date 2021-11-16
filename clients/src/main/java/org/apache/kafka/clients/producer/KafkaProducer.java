@@ -611,6 +611,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws TimeoutException if the time taken for initialize the transaction has surpassed <code>max.block.ms</code>.
      * @throws InterruptException if the thread is interrupted while blocked
      */
+    // 初始化tx，如果需要使用tx方法，此方法必须首先被调用
     public void initTransactions() {
         throwIfNoTransactionManager();
         throwIfProducerClosed();
@@ -634,6 +635,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      *         transactional.id is not authorized. See the exception for more details
      * @throws KafkaException if the producer has encountered a previous fatal error or for any other unexpected error
      */
+    // 开启tx
     public void beginTransaction() throws ProducerFencedException {
         throwIfNoTransactionManager();
         throwIfProducerClosed();
@@ -668,6 +670,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      *
      * @deprecated Since 3.0.0, please use {@link #sendOffsetsToTransaction(Map, ConsumerGroupMetadata)} instead.
      */
+    // 向消费者组提交当前tx中的消息offset
     @Deprecated
     public void sendOffsetsToTransaction(Map<TopicPartition, OffsetAndMetadata> offsets,
                                          String consumerGroupId) throws ProducerFencedException {
@@ -751,6 +754,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws TimeoutException if the time taken for committing the transaction has surpassed <code>max.block.ms</code>.
      * @throws InterruptException if the thread is interrupted while blocked
      */
+    // 提交tx
     public void commitTransaction() throws ProducerFencedException {
         throwIfNoTransactionManager();
         throwIfProducerClosed();
@@ -781,6 +785,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws TimeoutException if the time taken for aborting the transaction has surpassed <code>max.block.ms</code>.
      * @throws InterruptException if the thread is interrupted while blocked
      */
+    // 回滚tx
     public void abortTransaction() throws ProducerFencedException {
         throwIfNoTransactionManager();
         throwIfProducerClosed();
@@ -794,6 +799,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * Asynchronously send a record to a topic. Equivalent to <code>send(record, null)</code>.
      * See {@link #send(ProducerRecord, Callback)} for details.
      */
+    // 发送消息，此方法默认为async发送
+    // 如果想要实现同步调用的效果，只需对返回结果调用get方法
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record) {
         return send(record, null);
@@ -906,6 +913,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      *                          or missing metadata within {@code max.block.ms}.
      * @throws KafkaException If a Kafka related error occurs that does not belong to the public API exceptions.
      */
+    // 发送消息，支持回调
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
         // intercept the record, which can be potentially modified; this method does not throw exceptions
@@ -1145,6 +1153,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      *
      * @throws InterruptException If the thread is interrupted while blocked
      */
+    // 忽略linger.ms的值，直接唤醒发送线程，将缓冲区中的消息全部发送到broker中
     @Override
     public void flush() {
         log.trace("Flushing accumulated records in producer.");
@@ -1165,6 +1174,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws TimeoutException if metadata could not be refreshed within {@code max.block.ms}
      * @throws KafkaException for all Kafka-related exceptions, including the case where this method is called after producer close
      */
+    // 获取topic的路由（分区）信息
     @Override
     public List<PartitionInfo> partitionsFor(String topic) {
         Objects.requireNonNull(topic, "topic cannot be null");
@@ -1178,6 +1188,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     /**
      * Get the full set of internal metrics maintained by the producer.
      */
+    // 获取由生产者收集的统计信息
     @Override
     public Map<MetricName, ? extends Metric> metrics() {
         return Collections.unmodifiableMap(this.metrics.metrics());
@@ -1196,6 +1207,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws KafkaException If a unexpected error occurs while trying to close the client, this error should be treated
      *                        as fatal and indicate the client is no longer functionable.
      */
+    // 关闭发送者
     @Override
     public void close() {
         close(Duration.ofMillis(Long.MAX_VALUE));
@@ -1220,6 +1232,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws IllegalArgumentException If the <code>timeout</code> is negative.
      *
      */
+    // 定时关闭发送者
     @Override
     public void close(Duration timeout) {
         close(timeout, false);
