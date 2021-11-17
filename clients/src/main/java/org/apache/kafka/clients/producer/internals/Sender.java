@@ -74,51 +74,69 @@ public class Sender implements Runnable {
     private final Logger log;
 
     /* the state of each nodes connection */
+    // Kafka网络通信客户端，主要封装与broker的网络通信
     private final KafkaClient client;
 
     /* the record accumulator that batches records */
+    // 消息记录积累器，消息追加的入口（RecordAccumulator的append方法）
     private final RecordAccumulator accumulator;
 
     /* the metadata for the client */
+    // 元数据管理器，即topic的路由分区信息
     private final ProducerMetadata metadata;
 
     /* the flag indicating whether the producer should guarantee the message order on the broker or not. */
+    // 是否需要保证消息的顺序性
     private final boolean guaranteeMessageOrder;
 
     /* the maximum request size to attempt to send to the server */
+    // 调用send方法发送的最大请求大小，包括key、消息体序列化后的消息总大小都不能超过该值，
+    // 通过「max.request.size」设置
     private final int maxRequestSize;
 
     /* the number of acknowledgements to request from the server */
+    // 定义消息"已提交"的条件，即broker向客户端承诺已提交的条件，
+    // 可选值：0、1、-1
     private final short acks;
 
     /* the number of times to retry a failed request before giving up */
+    // 重试次数
     private final int retries;
 
     /* the clock instance used for getting the time */
+    // 时间工具类
     private final Time time;
 
     /* true while the sender thread is still running */
+    // 线程状态，true表示运行中
     private volatile boolean running;
 
     /* true when the caller wants to ignore all unsent/inflight messages and force close.  */
+    // 是否强制关闭，若为true则会忽略正在发送中的消息
     private volatile boolean forceClose;
 
     /* metrics */
+    // 消息发送相关的统计指标收集器
     private final SenderMetrics sensors;
 
     /* the max time to wait for the server to respond to the request*/
+    // 请求的超时时间
     private final int requestTimeoutMs;
 
     /* The max time to wait before retrying a request which has failed */
+    // 请求失败时在重试之前等待的时间
     private final long retryBackoffMs;
 
     /* current request API versions supported by the known brokers */
+    // api版本信息
     private final ApiVersions apiVersions;
 
     /* all the state related to transactions, in particular the producer id, producer epoch, and sequence numbers */
+    // tx处理器
     private final TransactionManager transactionManager;
 
     // A per-partition queue of batches ordered by creation time for tracking the in-flight batches
+    // 正在执行发送相关的消息批次
     private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
 
     public Sender(LogContext logContext,
