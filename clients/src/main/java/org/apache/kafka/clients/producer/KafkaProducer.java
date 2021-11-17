@@ -914,10 +914,16 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws KafkaException If a Kafka related error occurs that does not belong to the public API exceptions.
      */
     // 发送消息，支持回调
+    // KafkaProducer的send方法并不会直接向broker发送消息，kafka将消息发送async化
+    // 即分解成两个步骤，send方法负责将消息追加到内存中（即分区的缓存队列中）
+    // 然后会由专门的Send线程异步的将缓存中的消息批量发送到Kafka Broker中
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
         // intercept the record, which can be potentially modified; this method does not throw exceptions
+        // 发送消息之前首先会执行消息发送拦截器，拦截器通过interceptor.classes指定
+        // 类型为List<String>，每个元素为拦截器的全类路径限定名
         ProducerRecord<K, V> interceptedRecord = this.interceptors.onSend(record);
+        // 执行doSend方法
         return doSend(interceptedRecord, callback);
     }
 
@@ -939,6 +945,8 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             long nowMs = time.milliseconds();
             ClusterAndWaitTime clusterAndWaitTime;
             try {
+                // 获取topic的分区列表，如果本立没有该topic的分区信息，则需要向远端broker获取
+                // 该方法会返回拉取元数据所耗费的时间
                 clusterAndWaitTime = waitOnMetadata(record.topic(), record.partition(), nowMs, maxBlockTimeMs);
             } catch (KafkaException e) {
                 if (metadata.isClosed())
@@ -946,16 +954,21 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 throw e;
             }
             nowMs += clusterAndWaitTime.waitedOnMetadataMs;
+            // 在消息发送时的最大等待时间将会扣除上面调用waitOnMetadata()所损耗的时间
             long remainingWaitMs = Math.max(0, maxBlockTimeMs - clusterAndWaitTime.waitedOnMetadataMs);
             Cluster cluster = clusterAndWaitTime.cluster;
+            // 对key进行序列化
             byte[] serializedKey;
             try {
+                // 此方法需要注意的是虽然该方法传入了topic、headers
+                // 但是实际参与序列化的只有key
                 serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
             } catch (ClassCastException cce) {
                 throw new SerializationException("Can't convert key of class " + record.key().getClass().getName() +
                         " to class " + producerConfig.getClass(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in key.serializer", cce);
             }
+            // 对消息体进行序列化
             byte[] serializedValue;
             try {
                 serializedValue = valueSerializer.serialize(record.topic(), record.headers(), record.value());
@@ -964,25 +977,37 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         " to class " + producerConfig.getClass(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG).getName() +
                         " specified in value.serializer", cce);
             }
+            // 根据分区负载算法计算本次消息该发送至的分区
+            // 默认实现类为DefaultPartitioner
+            // 路由算法：
+            // 1）如果指定了key，则使用key的hashCode和分区数进行取模
+            // 2）如果未指定key，则轮训所有的分区
             int partition = partition(record, serializedKey, serializedValue, cluster);
             tp = new TopicPartition(record.topic(), partition);
 
+            // 如果是RecordHeaders（消息头消息），则设置为只读
             setReadOnly(record.headers());
             Header[] headers = record.headers().toArray();
 
+            // 根据使用的版本号，按照消息协议来计算消息的长度
             int serializedSize = AbstractRecords.estimateSizeInBytesUpperBound(apiVersions.maxUsableProduceMagic(),
                     compressionType, serializedKey, serializedValue, headers);
+            // 如果超过指定长度，则抛出异常
             ensureValidRecordSize(serializedSize);
+            // 初始化时间戳
             long timestamp = record.timestamp() == null ? nowMs : record.timestamp();
             if (log.isTraceEnabled()) {
                 log.trace("Attempting to append record {} with callback {} to topic {} partition {}", record, callback, record.topic(), partition);
             }
             // producer callback will make sure to call both 'callback' and interceptor callback
+            // 将传入的callback加入到拦截器链中
             Callback interceptCallback = new InterceptorCallback<>(callback, this.interceptors, tp);
 
+            // 如果tx处理器不为空，执行事务管理相关操作
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
+            // 将消息追加到缓冲区
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
@@ -1004,14 +1029,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (transactionManager != null && transactionManager.isTransactional())
                 transactionManager.maybeAddPartitionToTransaction(tp);
 
+            // 如果当前缓冲区已满或创建了一个新的缓冲区，则唤醒Sender(消息发送线程)，
+            // 将缓冲区中的消息发送到broker服务器中
             if (result.batchIsFull || result.newBatchCreated) {
                 log.trace("Waking up the sender since topic {} partition {} is either full or getting a new batch", record.topic(), partition);
                 this.sender.wakeup();
             }
+            // 最终返回future
+            // 从这里可以看出，doSend()方法执行完毕后，此时消息还不一定成功发送到broker
             return result.future;
             // handling exceptions and record the errors;
             // for API exceptions return them in the future,
             // for other exceptions throw directly
+            //异常处理
         } catch (ApiException e) {
             log.debug("Exception occurred during message send:", e);
             if (callback != null)
@@ -1108,6 +1138,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * Validate that the record size isn't too large
      */
     private void ensureValidRecordSize(int size) {
+        // 消息size超出指定长度就抛异常
         if (size > maxRequestSize)
             throw new RecordTooLargeException("The message is " + size +
                     " bytes when serialized which is larger than " + maxRequestSize + ", which is the value of the " +
