@@ -229,6 +229,8 @@ final class ClusterConnectionStates {
      */
     public long pollDelayMs(String id, long now) {
         long throttleDelayMs = throttleDelayMs(id, now);
+        // 如果已经顺利建立TCP连接且处于已连接「CHECKING_API_VERSIONS or READY」状态，
+        // 且触发了限流，则返回限流需要的等待时间
         if (isConnected(id) && throttleDelayMs > 0) {
             return throttleDelayMs;
         } else {

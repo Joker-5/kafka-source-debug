@@ -136,7 +136,7 @@ public class Sender implements Runnable {
     private final TransactionManager transactionManager;
 
     // A per-partition queue of batches ordered by creation time for tracking the in-flight batches
-    // 正在执行发送相关的消息批次
+    // 存储待发送的消息批次
     private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
 
     public Sender(LogContext logContext,
@@ -258,6 +258,7 @@ public class Sender implements Runnable {
         // main loop, runs until close is called
         while (running) {
             try {
+                // Sender线程在运行状态下主要的业务处理方法，将消息缓冲区中的消息向broker发送
                 runOnce();
             } catch (Exception e) {
                 log.error("Uncaught error in kafka producer I/O thread: ", e);
@@ -269,6 +270,8 @@ public class Sender implements Runnable {
         // okay we stopped accepting requests but there may still be
         // requests in the transaction manager, accumulator or waiting for acknowledgment,
         // wait until these are completed.
+        // 如果主动关闭Sender线程，且非强制关闭，则如果缓冲区还有消息待发送，
+        // 将会再次调用runOnce()方法将剩余的消息发送完毕后再退出
         while (!forceClose && ((this.accumulator.hasUndrained() || this.client.inFlightRequestCount() > 0) || hasPendingTransactionalRequests())) {
             try {
                 runOnce();
@@ -290,6 +293,7 @@ public class Sender implements Runnable {
             }
         }
 
+        // 如果强制关闭Sender线程，则会拒绝未完成提交的消息
         if (forceClose) {
             // We need to fail all the incomplete transactional requests and batches and wake up the threads waiting on
             // the futures.
@@ -301,6 +305,7 @@ public class Sender implements Runnable {
             this.accumulator.abortIncompleteBatches();
         }
         try {
+            // 关闭Kafka Client（i.e.网络通信的对象）
             this.client.close();
         } catch (Exception e) {
             log.error("Failed to close network client", e);
@@ -342,6 +347,7 @@ public class Sender implements Runnable {
         }
 
         long currentTimeMs = time.milliseconds();
+        // 调用sendProducerData方法发送消息
         long pollTimeout = sendProducerData(currentTimeMs);
         client.poll(pollTimeout, currentTimeMs);
     }
@@ -349,9 +355,11 @@ public class Sender implements Runnable {
     private long sendProducerData(long now) {
         Cluster cluster = metadata.fetch();
         // get the list of partitions with data ready to send
+        // 根据当前时间，并根据缓存队列中的数据判断哪些topic的哪些分区以及达到发送条件
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
         // if there are any partitions whose leaders are not known yet, force metadata update
+        // 如果在待发送的消息中未找到其路由信息，则需要首先去broker服务器中拉取对应的路由信息（i.e.分区leader的节点信息）
         if (!result.unknownLeaderTopics.isEmpty()) {
             // The set of topics with unknown leader contains topics with leader election pending as well as
             // topics which may have expired. Add the topic again to metadata to ensure it is included
@@ -365,18 +373,37 @@ public class Sender implements Runnable {
         }
 
         // remove any nodes we aren't ready to send to
+        // 移除在网络层面还没有准备好的分区，并计算在接下来多久的时间间隔内，该分区都将处于未准备状态
         Iterator<Node> iter = result.readyNodes.iterator();
+        // notReady等待时间默认是「Long.MAX_VALUE」
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // 网络环境准备好的条件：
+            // 1）分区不存在未完成的更新metadata的请求
+            // 2）当前生产者与对端broker已建立连接并完成了TCP三次挥手
+            // 3）若启用SSL、ACL等机制，相关状态都准备就绪
+            // 4）该分区对应的连接正在处理中的请求没有超过默认值，默认为5，可通过属性「max.in.flight.requests.per.connection」来设置
             if (!this.client.ready(node, now)) {
                 iter.remove();
+                // 更新notReadyTimeout，client.pollDelayMs 预估分区在接下来多久的时间间隔内都将处于「非ready」状态
+                // 标准如下：
+                // 1）如果与对端的TCP连接已建立好，并处于已连接状态，此时如果没有触发限流，则返回0，如果有触发限流，则返回限流的等待时间
+                // 2）如果与对端的TCP连接还未建立好，则返回Long.MAX_VALUE，因为连接建立好后，会唤醒发送线程的
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.pollDelayMs(node, now));
             }
         }
 
         // create produce requests
+        // 根据已准备的分区，从缓存区中抽取待发送的消息批次（ProducerBatch），并且按照<nodeId,List>组织
+        // 需要注意的是，抽取后的ProducerBatch将不能再追加消息了，即使还有剩余空间可用
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
+        // 将抽取的ProducerBatch加入到inFlightBatches中（就是Sender的一个attr）
+        // inFlightBatches声明如下：
+        // private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
+        // 即按照topic分区为key，存储抽取的ProducerBatch，
+        // 该属性的含义就是存储待发送的消息批次，可以根据该attr得知在消息发送时以分区为维度Sender线程的积压情况，
+        //「max.in.flight.requests.per.connection」就是来控制积压的最大数量，如果积压达到这个数值，针对该队列的消息发送就会被限流
         addToInflightBatches(batches);
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
