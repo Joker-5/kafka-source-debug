@@ -556,6 +556,7 @@ import java.util.regex.Pattern;
  * the consumer threads can hash into these queues using the TopicPartition to ensure in-order consumption and simplify
  * commit.
  */
+// KafkaConsumer线程不安全
 public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
     private static final String CLIENT_ID_METRIC_TAG = "client-id";
@@ -887,6 +888,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * process of getting reassigned).
      * @return The set of partitions currently assigned to this consumer
      */
+    // 获取该消费者的队列分配列表
     public Set<TopicPartition> assignment() {
         acquireAndEnsureOpen();
         try {
@@ -901,6 +903,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * {@link #subscribe(Collection, ConsumerRebalanceListener)}, or an empty set if no such call has been made.
      * @return The set of topics currently subscribed to
      */
+    // 获取该消费者的订阅信息
     public Set<String> subscription() {
         acquireAndEnsureOpen();
         try {
@@ -945,6 +948,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *                               previously (without a subsequent call to {@link #unsubscribe()}), or if not
      *                               configured at-least one partition assignment strategy
      */
+    // 订阅主题，并指定队列重平衡的监听器
     @Override
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
         acquireAndEnsureOpen();
@@ -993,6 +997,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *                               previously (without a subsequent call to {@link #unsubscribe()}), or if not
      *                               configured at-least one partition assignment strategy
      */
+    // 订阅主题
     @Override
     public void subscribe(Collection<String> topics) {
         subscribe(topics, new NoOpConsumerRebalanceListener());
@@ -1063,6 +1068,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *
      * @throws org.apache.kafka.common.KafkaException for any other unrecoverable errors (e.g. rebalance callback errors)
      */
+    // 取消订阅关系
     public void unsubscribe() {
         acquireAndEnsureOpen();
         try {
@@ -1097,6 +1103,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalStateException If {@code subscribe()} is called previously with topics or pattern
      *                               (without a subsequent call to {@link #unsubscribe()})
      */
+    // 取代subscription，手动指定消费哪些队列
     @Override
     public void assign(Collection<TopicPartition> partitions) {
         acquireAndEnsureOpen();
@@ -1206,6 +1213,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *             when the broker doesn't support this feature
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
      */
+    // 拉取消息，是KafkaConsumer的核心方法
     @Override
     public ConsumerRecords<K, V> poll(final Duration timeout) {
         return poll(time.timer(timeout), true);
@@ -1343,6 +1351,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *            before successful completion of the offset commit
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
      */
+    // 同步提交消费进度，为本批次的消费提交
     @Override
     public void commitSync() {
         commitSync(Duration.ofMillis(defaultApiTimeoutMs));
@@ -1386,6 +1395,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *            of the offset commit
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
      */
+    // 同步提交消息进度，可指定超时时间
     @Override
     public void commitSync(Duration timeout) {
         commitSync(subscriptions.allConsumed(), timeout);
@@ -1434,6 +1444,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *            of the offset commit
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
      */
+    // 显式同步提交消费进度，offsets指明需要提交消费进度的消息
     @Override
     public void commitSync(final Map<TopicPartition, OffsetAndMetadata> offsets) {
         commitSync(offsets, Duration.ofMillis(defaultApiTimeoutMs));
@@ -1482,6 +1493,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *            of the offset commit
      * @throws org.apache.kafka.common.errors.FencedInstanceIdException if this consumer instance gets fenced by broker.
      */
+    // 显式同步提交消费进度，可指定超时时间
     @Override
     public void commitSync(final Map<TopicPartition, OffsetAndMetadata> offsets, final Duration timeout) {
         acquireAndEnsureOpen();
@@ -1573,6 +1585,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalArgumentException if the provided offset is negative
      * @throws IllegalStateException if the provided TopicPartition is not assigned to this consumer
      */
+    // 重置consumer#poll方法下一次拉消息的偏移量
     @Override
     public void seek(TopicPartition partition, long offset) {
         if (offset < 0)
@@ -1635,6 +1648,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalArgumentException if {@code partitions} is {@code null}
      * @throws IllegalStateException if any of the provided partitions are not currently assigned to this consumer
      */
+    // 将poll方法下一次的拉取偏移量设置为队列的初始偏移量
     @Override
     public void seekToBeginning(Collection<TopicPartition> partitions) {
         if (partitions == null)
@@ -1660,6 +1674,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws IllegalArgumentException if {@code partitions} is {@code null}
      * @throws IllegalStateException if any of the provided partitions are not currently assigned to this consumer
      */
+    // 将poll方法下一次的拉取偏移量设置为队列的最大偏移量
     @Override
     public void seekToEnd(Collection<TopicPartition> partitions) {
         if (partitions == null)
@@ -1700,6 +1715,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.TimeoutException if the position cannot be determined before the
      *             timeout specified by {@code default.api.timeout.ms} expires
      */
+    // 获取将要被拉取的偏移量
     @Override
     public long position(TopicPartition partition) {
         return position(partition, Duration.ofMillis(defaultApiTimeoutMs));
@@ -1840,6 +1856,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.TimeoutException if the committed offset cannot be found before
      *             the timeout specified by {@code default.api.timeout.ms} expires.
      */
+    // 获取指定分区已提交的偏移量
     @Override
     public Map<TopicPartition, OffsetAndMetadata> committed(final Set<TopicPartition> partitions) {
         return committed(partitions, Duration.ofMillis(defaultApiTimeoutMs));
@@ -1890,6 +1907,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * Get the metrics kept by the consumer
      */
+    // 获取统计指标
     @Override
     public Map<MetricName, ? extends Metric> metrics() {
         return Collections.unmodifiableMap(this.metrics.metrics());
@@ -1912,6 +1930,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.TimeoutException if the offset metadata could not be fetched before
      *         the amount of time allocated by {@code default.api.timeout.ms} expires.
      */
+    // 获取topic的路由信息
     @Override
     public List<PartitionInfo> partitionsFor(String topic) {
         return partitionsFor(topic, Duration.ofMillis(defaultApiTimeoutMs));
@@ -1968,6 +1987,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.TimeoutException if the offset metadata could not be fetched before
      *         the amount of time allocated by {@code default.api.timeout.ms} expires.
      */
+    // 获取所有topic的路由信息
     @Override
     public Map<String, List<PartitionInfo>> listTopics() {
         return listTopics(Duration.ofMillis(defaultApiTimeoutMs));
@@ -2006,6 +2026,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @param partitions The partitions which should be paused
      * @throws IllegalStateException if any of the provided partitions are not currently assigned to this consumer
      */
+    // 挂起分区，下一次poll方法将不会返回这些分区的消息
     @Override
     public void pause(Collection<TopicPartition> partitions) {
         acquireAndEnsureOpen();
@@ -2026,6 +2047,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @param partitions The partitions which should be resumed
      * @throws IllegalStateException if any of the provided partitions are not currently assigned to this consumer
      */
+    // 恢复挂起的分区
     @Override
     public void resume(Collection<TopicPartition> partitions) {
         acquireAndEnsureOpen();
@@ -2044,6 +2066,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *
      * @return The set of paused partitions
      */
+    // 获取已挂起的分区信息
     @Override
     public Set<TopicPartition> paused() {
         acquireAndEnsureOpen();
@@ -2075,6 +2098,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.UnsupportedVersionException if the broker does not support looking up
      *         the offsets by timestamp
      */
+    // 根据时间戳获取最近的一次消息的偏移量
     @Override
     public Map<TopicPartition, OffsetAndTimestamp> offsetsForTimes(Map<TopicPartition, Long> timestampsToSearch) {
         return offsetsForTimes(timestampsToSearch, Duration.ofMillis(defaultApiTimeoutMs));
@@ -2133,6 +2157,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.TimeoutException if the offset metadata could not be fetched before
      *         expiration of the configured {@code default.api.timeout.ms}
      */
+    // 查询指定分区当前最小的偏移量
     @Override
     public Map<TopicPartition, Long> beginningOffsets(Collection<TopicPartition> partitions) {
         return beginningOffsets(partitions, Duration.ofMillis(defaultApiTimeoutMs));
@@ -2183,6 +2208,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws org.apache.kafka.common.errors.TimeoutException if the offset metadata could not be fetched before
      *         the amount of time allocated by {@code request.timeout.ms} expires
      */
+    // 获取指定分区当前最大的偏移量
     @Override
     public Map<TopicPartition, Long> endOffsets(Collection<TopicPartition> partitions) {
         return endOffsets(partitions, Duration.ofMillis(requestTimeoutMs));
@@ -2320,6 +2346,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      *             before or while this function is called
      * @throws org.apache.kafka.common.KafkaException for any other error during close
      */
+    // 关闭消费者
     @Override
     public void close() {
         close(Duration.ofMillis(DEFAULT_CLOSE_TIMEOUT_MS));
@@ -2362,6 +2389,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * The thread which is blocking in an operation will throw {@link org.apache.kafka.common.errors.WakeupException}.
      * If no thread is blocking in a method which can throw {@link org.apache.kafka.common.errors.WakeupException}, the next call to such a method will raise it instead.
      */
+    // 唤醒消费者
     @Override
     public void wakeup() {
         this.client.wakeup();
