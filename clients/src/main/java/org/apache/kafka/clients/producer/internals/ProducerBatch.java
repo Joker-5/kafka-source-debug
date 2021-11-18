@@ -384,6 +384,7 @@ public final class ProducerBatch {
     }
 
     boolean hasReachedDeliveryTimeout(long deliveryTimeoutMs, long now) {
+        // 可以看到判断过期的计算逻辑是「系统当前时间-ProducerBatch的创建时间」>=deliveryTimeoutMs
         return deliveryTimeoutMs <= now - this.createdMs;
     }
 

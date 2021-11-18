@@ -398,9 +398,9 @@ public class Sender implements Runnable {
         // 根据已准备的分区，从缓存区中抽取待发送的消息批次（ProducerBatch），并且按照<nodeId,List>组织
         // 需要注意的是，抽取后的ProducerBatch将不能再追加消息了，即使还有剩余空间可用
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
-        // 将抽取的ProducerBatch加入到inFlightBatches中（就是Sender的一个attr）
-        // inFlightBatches声明如下：
-        // private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
+        // 将抽取的ProducerBatch加入到inflightBatches中（就是Sender的一个attr）
+        // inflightBatches声明如下：
+        // private final Map<TopicPartition, List<ProducerBatch>> inflightBatches;
         // 即按照topic分区为key，存储抽取的ProducerBatch，
         // 该属性的含义就是存储待发送的消息批次，可以根据该attr得知在消息发送时以分区为维度Sender线程的积压情况，
         //「max.in.flight.requests.per.connection」就是来控制积压的最大数量，如果积压达到这个数值，针对该队列的消息发送就会被限流
@@ -413,6 +413,9 @@ public class Sender implements Runnable {
             }
         }
 
+        // 从inflightBatches与batches中查找已过期的消息批次（ProducerBatch），
+        // 判断是否过期的标准是系统当前时间和ProducerBatch创建时间之差是否超过120s
+        // 过期时间可以通过参数「delivery.timeout.ms」设置
         accumulator.resetNextBatchExpiryTime();
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
@@ -421,6 +424,9 @@ public class Sender implements Runnable {
         // Reset the producer id if an expired batch has previously been sent to the broker. Also update the metrics
         // for expired batches. see the documentation of @TransactionState.resetIdempotentProducerId to understand why
         // we need to reset the producer id here.
+        // 处理已超时的消息批次，通知该批消息发送失败，
+        // i.e.通过设置KafkaProducer#send方法返回的凭证中的「FutureRecordMetadata」里的「ProduceRequestResult result」，
+        // 使之调用其get方法不会阻塞
         if (!expiredBatches.isEmpty())
             log.trace("Expired {} batches in accumulator", expiredBatches.size());
         for (ProducerBatch expiredBatch : expiredBatches) {
@@ -432,6 +438,7 @@ public class Sender implements Runnable {
                 transactionManager.markSequenceUnresolved(expiredBatch);
             }
         }
+        // 收集统计指标
         sensors.updateProduceRequestMetrics(batches);
 
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
@@ -439,6 +446,7 @@ public class Sender implements Runnable {
         // time, and the delay time for checking data availability. Note that the nodes may have data that isn't yet
         // sendable due to lingering, backing off, etc. This specifically does not include nodes with sendable data
         // that aren't ready to send since they would cause busy looping.
+        // 设置下一次的发送延时
         long pollTimeout = Math.min(result.nextReadyCheckDelayMs, notReadyTimeout);
         pollTimeout = Math.min(pollTimeout, this.accumulator.nextExpiryTimeMs() - now);
         pollTimeout = Math.max(pollTimeout, 0);
@@ -450,6 +458,9 @@ public class Sender implements Runnable {
             // otherwise the select time will be the time difference between now and the metadata expiry time;
             pollTimeout = 0;
         }
+        // 按照brokerId分别构建发送请求，注意只是构建，并没有触发真正的网络调用，最终会通过NetworkClient#send方法将这批数据设置到
+        // NetworkClient的待发送数据中
+        // i.e.每一个broker会将多个ProducerBatch一起封装成一个请求进行发送，在同一时间每一个与broker的连接只能发送一个请求
         sendProduceRequests(batches, now);
         return pollTimeout;
     }
