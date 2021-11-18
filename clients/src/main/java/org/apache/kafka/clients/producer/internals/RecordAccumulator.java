@@ -73,6 +73,7 @@ public final class RecordAccumulator {
     private final int batchSize;
     private final CompressionType compression;
     private final int lingerMs;
+    // 当发生异常重试之前需要等待的时间，默认为100ms，可通过属性「retry.backoff.ms」配置
     private final long retryBackoffMs;
     private final int deliveryTimeoutMs;
     private final BufferPool free;
@@ -468,12 +469,17 @@ public final class RecordAccumulator {
      * </ul>
      * </ol>
      */
+    // 根据缓冲区的消息，判断哪些分区已达到发送条件
     public ReadyCheckResult ready(Cluster cluster, long nowMs) {
         Set<Node> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<String> unknownLeaderTopics = new HashSet<>();
 
+        // 当前生产者缓存已不足，创建新的ProducerBatch时阻塞在申请缓存空间的线程大于0，
+        // 此时应立即将缓冲区的消息发送到服务器中
         boolean exhausted = this.free.queued() > 0;
+        // 对生产者缓存区「ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches」进行遍历，
+        // 从中挑选已准备好的消息批次
         for (Map.Entry<TopicPartition, Deque<ProducerBatch>> entry : this.batches.entrySet()) {
             Deque<ProducerBatch> deque = entry.getValue();
             synchronized (deque) {
@@ -482,24 +488,47 @@ public final class RecordAccumulator {
                 ProducerBatch batch = deque.peekFirst();
                 if (batch != null) {
                     TopicPartition part = entry.getKey();
+                    // 从生产者元数据缓存中尝试查找分区（TopicPartition）的leader信息
                     Node leader = cluster.leaderFor(part);
                     if (leader == null) {
                         // This is a partition for which leader is not known, but messages are available to send.
                         // Note that entries are currently not removed from batches when deque is empty.
+                        // 如果不存在，就将该topic添加到unknownLeaderTopics中
+                        // 稍后会发送元数据更新请求去broker端查找分区的路由信息
                         unknownLeaderTopics.add(part.topic());
+                        // 如果不在readyNodes中就需要判断是否满足条件，isMuted与顺序消息有关
                     } else if (!readyNodes.contains(leader) && !isMuted(part)) {
+                        // 该ProducerBatch已等待的时长，其值为「当前时间戳-lastAttemptMs」（下限为0），
+                        // 在ProducerBatch创建时或需要重试时会将当前时间戳赋给lastAttemptMs
                         long waitedTimeMs = batch.waitedTimeMs(nowMs);
+                        // 后台发送是否关闭，i.e.如果需要重试且等待时间 < retryBackoffMs，则backingOff <- true，
+                        // 此时也意味着此batch尚未准备好
                         boolean backingOff = batch.attempts() > 0 && waitedTimeMs < retryBackoffMs;
+                        // send线程发送消息需要的等待时间，如果backingOff为true，表示该batch是在重试，
+                        // 并且等待时间小于系统设置的需要等待的时间，在这种情况下timeToWaitMs = retryBackoffMs，
+                        // 否则需要等待的时间为lingerMs
                         long timeToWaitMs = backingOff ? retryBackoffMs : lingerMs;
+                        // 判断当前batch是否已满：
+                        // 1）如果「Deque<ProducerBatch> deque」队列数 > 1（此时意味着一定有一个ProducerBatch被写满）
+                        // 2）或ProducerBatch已被写满
                         boolean full = deque.size() > 1 || batch.isFull();
+                        // 如果已等待时间>需要等待的时间则已过期，
+                        // 如果把发送看成定时发送的话，expired为true表示定时器已到达触发点，需要执行
                         boolean expired = waitedTimeMs >= timeToWaitMs;
                         boolean transactionCompleting = transactionManager != null && transactionManager.isCompleting();
+                        // 是否可进行发送，满足下面任意一个条件即可：
+                        // 1）该batch已写满
+                        // 2）已等待系统规定的时长
+                        // 3）发送者内部缓冲区已耗尽且有新的线程需要申请
+                        // 4）发送者的close方法被调用
+                        // 5）发送者的flush方法被调用
                         boolean sendable = full
                                 || expired
                                 || exhausted
                                 || closed
                                 || flushInProgress()
                                 || transactionCompleting;
+                        // 判断是否准备好
                         if (sendable && !backingOff) {
                             readyNodes.add(leader);
                         } else {
