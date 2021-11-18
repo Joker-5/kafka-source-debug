@@ -131,28 +131,51 @@ import static java.util.Collections.emptyList;
  *     on a different thread.</li>
  * </ul>
  */
+// Fetcher类用于封装消息拉取，是消息拉取的门面类，其是线程安全的
 public class Fetcher<K, V> implements Closeable {
     private final Logger log;
     private final LogContext logContext;
+    // 消费端网络客户端，Kafka负责网络通讯的实现类
     private final ConsumerNetworkClient client;
     private final Time time;
+    // 一次消息拉取所需的最小字节数，如果不够的话则会触发阻塞。
+    // 默认值为 1byte ，如果增大这个值则会增大吞吐量，但会增加延迟，
+    // 可通过参数「fetch.min.bytes」设置
     private final int minBytes;
+    // 一次消息拉取允许的最大字节数，但此值并不是一个严格的、绝对的要求，默认为50m
+    // 如果一个分区的第一批记录超过了这个值，其同样也会返回，可通过参数「fetch.max.bytes」来设置，
+    // 其同时不可超过在broker级别中设置的参数「message.max.bytes」和在topic级别设置的参数「max.message.bytes」
     private final int maxBytes;
+    // 在broker中如果符合拉取条件的数据 < minBytes时的阻塞时间，默认为500ms，
+    // 可通过「fetch.max.wait.ms」来设置
     private final int maxWaitMs;
+    // 每个分区返回的最大msg字节数，如果分区中的第一批消息大于fetchSize同样也会返回
     private final int fetchSize;
+    // 拉取失败重试后需要阻塞的时间，默认为100ms，可通过「retry.backoff.ms」设置
     private final long retryBackoffMs;
+    // 客户端向broker发送请求时的最大超时时间，默认为30s，可通过「request.timeout.ms」设置
     private final long requestTimeoutMs;
+    // 单次拉取返回的最大记录数，默认为500，可通过「max.poll.records」设置
     private final int maxPollRecords;
+    // 是否需要检查消息的crcs校验和，默认为true，可通过「check.crcs」设置
     private final boolean checkCrcs;
     private final String clientRackId;
+    // 记录元数据相关消息
     private final ConsumerMetadata metadata;
+    // 消息拉取统计监控相关类
     private final FetchManagerMetrics sensors;
+    // 订阅msg状态相关类
     private final SubscriptionState subscriptions;
+    // 已完成Fetch的请求结果，待消费端从中取出数据
     private final ConcurrentLinkedQueue<CompletedFetch> completedFetches;
     private final BufferSupplier decompressionBufferSupplier = BufferSupplier.create();
+    // key的反序列化器
     private final Deserializer<K> keyDeserializer;
+    // value的反序列化器
     private final Deserializer<V> valueDeserializer;
+    // Kafka xa隔离级别
     private final IsolationLevel isolationLevel;
+    // 拉取会话监听器
     private final Map<Integer, FetchSessionHandler> sessionHandlers;
     private final AtomicReference<RuntimeException> cachedListOffsetsException = new AtomicReference<>();
     private final AtomicReference<RuntimeException> cachedOffsetForLeaderException = new AtomicReference<>();
