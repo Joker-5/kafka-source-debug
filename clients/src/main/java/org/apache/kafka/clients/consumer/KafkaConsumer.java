@@ -1303,17 +1303,26 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * @throws KafkaException if the rebalance callback throws exception
      */
+    // 向broker拉取消息的入口
     private Map<TopicPartition, List<ConsumerRecord<K, V>>> pollForFetches(Timer timer) {
+        // 计算本次拉取的超时时间，计算逻辑：
+        // 1）如果协调器为null，则返回当前计时器的剩余时间
+        // 2）如果协调器不为null，
+        // 2.1）如果不开启自动提交位移且未加入消费组，则超时时间为Long.MAX_VALUE
+        // 2.2）如果不开启自动提交位移且已加入消费组，则返回距离下一次发送心跳包还剩的时间
+        // 2.3）如果开启自动提交位移，则返回「距离下次自动提交位移所需时间」和「距离下次发送心跳包所需时间」的最小值
         long pollTimeout = coordinator == null ? timer.remainingMs() :
                 Math.min(coordinator.timeToNextPoll(timer.currentTimeMs()), timer.remainingMs());
 
         // if data is available already, return it immediately
+        // 如果数据已经拉回到本地，直接返回数据
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
         // send any new fetches (won't resend pending fetches)
+        // 组装发送请求，并将器存储在待发送请求列表中
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -1321,6 +1330,9 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
         // NOTE: the use of cachedSubscriptionHashAllFetchPositions means we MUST call
         // updateAssignmentMetadataIfNeeded before this method.
+        // 如果已缓存的分区信息中存在某些分区缺少偏移量且拉取的超时时间 > 失败重试需要阻塞的时间，
+        // 则更新此处拉取的超时时间为失败重试所需要的间隔时间，
+        // 此处的主要目的是不希望在poll过程中被阻塞
         if (!cachedSubscriptionHashAllFetchPositions && pollTimeout > retryBackoffMs) {
             pollTimeout = retryBackoffMs;
         }
@@ -1328,13 +1340,16 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         log.trace("Polling for fetches with timeout {}", pollTimeout);
 
         Timer pollTimer = time.timer(pollTimeout);
+        // 调用NetworkClient的poll方法发起消息拉取操作（触发网络读写）
         client.poll(pollTimer, () -> {
             // since a fetch might be completed by the background thread, we need this poll condition
             // to ensure that we do not block unnecessarily in poll()
             return !fetcher.hasAvailableFetches();
         });
+        // 更新本次拉取的时间
         timer.update(pollTimer.currentTimeMs());
 
+        // 将从broker拉取到的数据返回（封装成msg）
         return fetcher.fetchedRecords();
     }
 

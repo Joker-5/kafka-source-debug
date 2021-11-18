@@ -337,8 +337,10 @@ public abstract class AbstractCoordinator implements Closeable {
     protected synchronized long timeToNextHeartbeat(long now) {
         // if we have not joined the group or we are preparing rebalance,
         // we don't need to send heartbeats
+        // 未加入到消费组
         if (state.hasNotJoinedGroup())
             return Long.MAX_VALUE;
+        // 返回距下次发送心跳连接所剩的时间
         return heartbeat.timeToNextHeartbeat(now);
     }
 
