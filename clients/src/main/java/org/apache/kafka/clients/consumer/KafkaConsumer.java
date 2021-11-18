@@ -569,23 +569,36 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     final KafkaConsumerMetrics kafkaConsumerMetrics;
 
     private Logger log;
+    // 发出请求时传递给服务器的id字符串，设置此值的目的是方便在服务器端请求日志中包含逻辑应用程序名称，从而能够跟踪ip/端口之外的请求源，
+    // 此值可以设置为应用名称
     private final String clientId;
+    // 消费组id。同一个消费组内的多个消费者共同消费一个topic下的消息
     private final Optional<String> groupId;
+    // 消息协调器
     private final ConsumerCoordinator coordinator;
+    // key序列化器
     private final Deserializer<K> keyDeserializer;
+    // value序列化器
     private final Deserializer<V> valueDeserializer;
     private final Fetcher<K, V> fetcher;
     private final ConsumerInterceptors<K, V> interceptors;
     private final IsolationLevel isolationLevel;
 
     private final Time time;
+    // 网络通信客户端
     private final ConsumerNetworkClient client;
+    // 用于管理订阅状态的类，用于跟踪topics、partitions、offsets等信息
     private final SubscriptionState subscriptions;
+    // 消费者元数据信息，包含路由信息
     private final ConsumerMetadata metadata;
+    // 如果向broker发送请求失败后，发起重试之前需要等待的间隔时间，通过属性「retry.backoff.ms」指定
     private final long retryBackoffMs;
+    // 一次请求的超时时间
     private final long requestTimeoutMs;
+    // 为所有可能阻塞的api设置一个默认的超时时间
     private final int defaultApiTimeoutMs;
     private volatile boolean closed = false;
+    // 分区负载算法
     private List<ConsumerPartitionAssignor> assignors;
 
     // currentThread holds the threadId of the current thread accessing KafkaConsumer
