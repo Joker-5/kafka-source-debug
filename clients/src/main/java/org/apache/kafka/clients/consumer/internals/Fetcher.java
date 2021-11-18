@@ -656,18 +656,27 @@ public class Fetcher<K, V> implements Closeable {
      * @throws TopicAuthorizationException If there is TopicAuthorization error in fetchResponse.
      */
     public Map<TopicPartition, List<ConsumerRecord<K, V>>> fetchedRecords() {
+        // 按分区存放的已拉取到的消息，之后将其返回给客户端处理
         Map<TopicPartition, List<ConsumerRecord<K, V>>> fetched = new HashMap<>();
         Queue<CompletedFetch> pausedCompletedFetches = new ArrayDeque<>();
+        // 剩余可拉取的消息
         int recordsRemaining = maxPollRecords;
 
         try {
+            // 在loop中取已完成fetch的消息，loop跳出的条件（or）：
+            // 1）缓存中所有拉取结果已经处理完毕（已经没有记录可处理了「records == null」）
+            // 2）拉取的消息已经达到一次拉取的最大消息条数（recordsRemaining > 0）
             while (recordsRemaining > 0) {
+                // 下面主要完成从缓存中解析数据的操作
+                // 初次运行进入下方if分支「nextInLineFetch == null || nextInLineFetch.isConsumed」
                 if (nextInLineFetch == null || nextInLineFetch.isConsumed) {
+                    // 从completedFetches列表中获取一个Fetcher请求，并不会从该队列中移除该元素
                     CompletedFetch records = completedFetches.peek();
                     if (records == null) break;
 
                     if (records.notInitialized()) {
                         try {
+                            // 对处理结果进行解析
                             nextInLineFetch = initializeCompletedFetch(records);
                         } catch (Exception e) {
                             // Remove a completedFetch upon a parse with exception if (1) it contains no records, and
@@ -684,6 +693,7 @@ public class Fetcher<K, V> implements Closeable {
                     } else {
                         nextInLineFetch = records;
                     }
+                    // 处理完成后将上述Fetcher从队列中移除
                     completedFetches.poll();
                 } else if (subscriptions.isPaused(nextInLineFetch.partition)) {
                     // when the partition is paused we add the records back to the completedFetches queue instead of draining
@@ -692,6 +702,7 @@ public class Fetcher<K, V> implements Closeable {
                     pausedCompletedFetches.add(nextInLineFetch);
                     nextInLineFetch = null;
                 } else {
+                    // 将消息封装成ConsumerRecord，返回给消费端线程处理
                     List<ConsumerRecord<K, V>> records = fetchRecords(nextInLineFetch, recordsRemaining);
 
                     if (!records.isEmpty()) {
