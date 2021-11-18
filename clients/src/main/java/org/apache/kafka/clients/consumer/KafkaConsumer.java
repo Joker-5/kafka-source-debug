@@ -1291,6 +1291,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         }
     }
 
+    // 对元数据、rebalance、更新拉取偏移量等工作进行处理
     boolean updateAssignmentMetadataIfNeeded(final Timer timer, final boolean waitForJoinGroup) {
         if (coordinator != null && !coordinator.poll(timer, waitForJoinGroup)) {
             return false;
@@ -2471,6 +2472,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // If any partitions have been truncated due to a leader change, we need to validate the offsets
         fetcher.validateOffsetsIfNeeded();
 
+        // 如果订阅关系中所有分区都有有效的位移，直接返回true
         cachedSubscriptionHashAllFetchPositions = subscriptions.hasAllFetchPositions();
         if (cachedSubscriptionHashAllFetchPositions) return true;
 
@@ -2479,15 +2481,18 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // coordinator lookup if there are partitions which have missing positions, so
         // a consumer with manually assigned partitions can avoid a coordinator dependence
         // by always ensuring that assigned partitions have an initial position.
+        // 如果存在任意一个分区没有有效的位移信息，则需要向broker发送请求，从broker获取该消费组，该分区的消费进度
         if (coordinator != null && !coordinator.refreshCommittedOffsetsIfNeeded(timer)) return false;
 
         // If there are partitions still needing a position and a reset policy is defined,
         // request reset using the default policy. If no reset strategy is defined and there
         // are partitions with a missing position, then we will raise an exception.
+        // 如果经过broker请求后，订阅关系中还是有某些分区没有获取到有效的偏移量，则使用偏移量重置策略来进行重置，如果没配置就直接抛异常
         subscriptions.resetInitializingPositions();
 
         // Finally send an asynchronous request to lookup and update the positions of any
         // partitions which are awaiting reset.
+        // 发送一个异步请求去重置那些等待重置的分区
         fetcher.resetOffsetsIfNeeded();
 
         return true;
