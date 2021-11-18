@@ -467,8 +467,10 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
     public boolean poll(Timer timer, boolean waitForJoinGroup) {
         maybeUpdateSubscriptionMetadata();
 
+        // 执行已完成的offset（消费进度）提交请求的回调函数
         invokeCompletedOffsetCommitCallbacks();
 
+        // 队列负载算法为「自动分配：Kafka根据消费者个数与分区数动态负载分区」的相关处理逻辑
         if (subscriptions.hasAutoAssignedPartitions()) {
             if (protocol == null) {
                 throw new IllegalStateException("User configured " + ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG +
@@ -476,11 +478,18 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             }
             // Always update the heartbeat last poll time so that the heartbeat thread does not leave the
             // group proactively due to application inactivity even if (say) the coordinator cannot be found.
+            // 更新发送心跳相关的时间，如heartbeatTimer（最新发送心跳的时间）、sessionTimer（会话最新活跃的时间）、pollTimer（最新拉取消息的时间）
             pollHeartbeat(timer.currentTimeMs());
+            // 如果不存在协调器或协调器已断开连接，直接返回false，结束本次拉取
             if (coordinatorUnknown() && !ensureCoordinatorReady(timer)) {
                 return false;
             }
 
+            // 判断是否需要触发rebalance，判断条件如下：
+            // 1）如果队列负载是通过用户指定的，返回false，无需rebalance
+            // 2）如果队列是自动负载，topic元数据发送了变化，则需要rebalance
+            // 3）如果队列是自动负载，订阅关系发生了变化，则需要rebalance
+            // 如果需要rebalance，则需要同步更新元数据，此过程会阻塞
             if (rejoinNeededOrPending()) {
                 // due to a race condition between the initial metadata fetch and the initial rebalance,
                 // we need to ensure that the metadata is fresh before joining initially. This ensures
@@ -521,11 +530,16 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
             // awaitMetadataUpdate() initiates new connections with configured backoff and avoids the busy loop.
             // When group management is used, metadata wait is already performed for this scenario as
             // coordinator is unknown, hence this check is not required.
+            // 用户手动为消费组指定负载相关队列的相关处理逻辑，
+            // 如果需要更新元数据且分区还没准备好，则需要同步阻塞等待元数据更新完毕
             if (metadata.updateRequested() && !client.hasReadyNodes(timer.currentTimeMs())) {
                 client.awaitMetadataUpdate(timer);
             }
         }
 
+        // 如果开启了自动提交消费进度且已到下一次提交时间，则直接提交。
+        // Kafka通过设置属性「enable.auto.commit」来开启自动提交，参数默认为true，
+        // 每隔5s提交一次消费进度，提交间隔可以通过参数「auto.commit.interval.ms」来设置
         maybeAutoCommitOffsetsAsync(timer.currentTimeMs());
         return true;
     }

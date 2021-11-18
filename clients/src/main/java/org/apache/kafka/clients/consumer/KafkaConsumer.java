@@ -1235,20 +1235,29 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     /**
      * @throws KafkaException if the rebalance callback throws exception
      */
+    // includeMetadataInTimeout：拉取消息的超时时间是否包含更新元数据的时间，默认为true
     private ConsumerRecords<K, V> poll(final Timer timer, final boolean includeMetadataInTimeout) {
+        // 检查是否可以拉取消息
+        // 判断条件：
+        // 1）KafkaConsumer是否有其他线程在运行，如果有就抛异常（因为KafkaConsumer并不是线程安全的，在同一时间只能由一个线程来执行）
+        // 2）KafkaConsumer是否被关闭，如果关闭了就抛异常
         acquireAndEnsureOpen();
         try {
             this.kafkaConsumerMetrics.recordPollStart(timer.currentTimeMs());
 
+            // 如果当前消费者未订阅任何topic或没有指定队列，则抛错，结束本次消息拉取
             if (this.subscriptions.hasNoSubscriptionOrUserAssignment()) {
                 throw new IllegalStateException("Consumer is not subscribed to any topics or assigned any partitions");
             }
 
+            // 用do-while循环拉取消息，直到超时or拉取到消息
             do {
+                // 避免在使用wakeup时，有请求想唤醒时则抛异常
                 client.maybeTriggerWakeup();
 
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
+                    // 更新相关元数据，为真正向broker发送消息拉取请求做好准备
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
@@ -1256,6 +1265,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     }
                 }
 
+                // 调用pollForFetches向broker拉取消息
                 final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(timer);
                 if (!records.isEmpty()) {
                     // before returning the fetched records, we can send off the next round of fetches
@@ -1264,10 +1274,12 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     //
                     // NOTE: since the consumed position has already been updated, we must not allow
                     // wakeups or any other errors to be triggered prior to returning the fetched records.
+                    // 如果拉取到的消息集合不为空，在返回该批消息之前，若还有积压的拉取请求，可以继续发送拉取请求
                     if (fetcher.sendFetches() > 0 || client.hasPendingRequests()) {
                         client.transmitSends();
                     }
 
+                    // 执行消息拦截器
                     return this.interceptors.onConsume(new ConsumerRecords<>(records));
                 }
             } while (timer.notExpired());
@@ -2487,6 +2499,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     private void acquireAndEnsureOpen() {
         acquire();
+        // 判断Kafka Consumer是否被关闭
         if (this.closed) {
             release();
             throw new IllegalStateException("This consumer has already been closed.");
@@ -2500,6 +2513,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      * @throws ConcurrentModificationException if another thread already has the lock
      */
     private void acquire() {
+        // 根据线程Id判断是否是同一线程
         long threadId = Thread.currentThread().getId();
         if (threadId != currentThread.get() && !currentThread.compareAndSet(NO_CURRENT_THREAD, threadId))
             throw new ConcurrentModificationException("KafkaConsumer is not safe for multi-threaded access");

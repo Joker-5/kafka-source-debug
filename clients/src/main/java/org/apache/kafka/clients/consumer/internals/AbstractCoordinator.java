@@ -233,6 +233,9 @@ public abstract class AbstractCoordinator implements Closeable {
      * @return true If coordinator discovery and initial connection succeeded, false otherwise
      */
     protected synchronized boolean ensureCoordinatorReady(final Timer timer) {
+        // TODO 为什么判断条件第一条是coordinatorUnknown()然后在ensureCoordinatorReady()要再走一遍？
+        // TODO 基于性能方面的考虑吗？
+        // TODO ensureCoordinatorReady()需要加synchronized锁，本身比较重，能利用短路求值先判完性能比较ok
         if (!coordinatorUnknown())
             return true;
 
