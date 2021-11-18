@@ -599,10 +599,15 @@ public final class RecordAccumulator {
 
     private List<ProducerBatch> drainBatchesForOneNode(Cluster cluster, Node node, int maxSize, long now) {
         int size = 0;
+        // 根据brokerId获取该broker上的所有主分区
         List<PartitionInfo> parts = cluster.partitionsForNode(node.id());
         List<ProducerBatch> ready = new ArrayList<>();
         /* to make starvation less likely this loop doesn't start at 0 */
+        // 初始化start
+        // start：当前开始遍历的分区序号
+        // TODO drainIndex：上次抽取的队列索引？
         int start = drainIndex = drainIndex % parts.size();
+        // loop从缓存区抽取分区中积累的数据
         do {
             PartitionInfo part = parts.get(drainIndex);
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
@@ -612,22 +617,26 @@ public final class RecordAccumulator {
             if (isMuted(tp))
                 continue;
 
+            // 根据topic+partition号从生产者发送的缓冲区中获取已积累的Deque
             Deque<ProducerBatch> deque = getDeque(tp);
             if (deque == null)
                 continue;
 
             synchronized (deque) {
                 // invariant: !isMuted(tp,now) && deque != null
+                // 从deque的头获取一个元素（消息追加时追加到deque的tail）
                 ProducerBatch first = deque.peekFirst();
                 if (first == null)
                     continue;
 
                 // first != null
+                // 如果当前batch是重试（first.attempts() > 0 说明已经至少执行一次了），且未达到阻塞时间，则跳过该partition
                 boolean backoff = first.attempts() > 0 && first.waitedTimeMs(now) < retryBackoffMs;
                 // Only drain the batch if it is not during backoff period.
                 if (backoff)
                     continue;
 
+                // 如果当前已抽取的消息总大小+新消息已超过maxRequestSize，则结束抽取
                 if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
                     // there is a rare case that a single batch size is larger than the request size due to
                     // compression; in this case we will still eventually send this batch in a single request
@@ -663,6 +672,8 @@ public final class RecordAccumulator {
 
                         transactionManager.addInFlightBatch(batch);
                     }
+                    // 将当前batch加入到已准备集合中，并关闭该批次
+                    // i.e.不再运行向该batch中追加消息
                     batch.close();
                     size += batch.records().sizeInBytes();
                     ready.add(batch);
@@ -684,11 +695,16 @@ public final class RecordAccumulator {
      * @param now     The current unix time in milliseconds
      * @return A list of {@link ProducerBatch} for each node specified with total size less than the requested maxSize.
      */
+    // cluster：集群信息
+    // nodes：已准备好的节点集合
+    // maxSize：一次请求的最大字节数
+    // now：当前时间
     public Map<Integer, List<ProducerBatch>> drain(Cluster cluster, Set<Node> nodes, int maxSize, long now) {
         if (nodes.isEmpty())
             return Collections.emptyMap();
 
         Map<Integer, List<ProducerBatch>> batches = new HashMap<>();
+        // 遍历所有准备好的节点，调用drainBatchesForOneNode方法抽取数据，组装成「Map<Integer, List<ProducerBatch>> batches」
         for (Node node : nodes) {
             List<ProducerBatch> ready = drainBatchesForOneNode(cluster, node, maxSize, now);
             batches.put(node.id(), ready);
