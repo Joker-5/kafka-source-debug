@@ -64,6 +64,8 @@ public interface ProducerInterceptor<K, V> extends Configurable {
      * @param record the record from client or the record returned by the previous interceptor in the chain of interceptors.
      * @return producer record to send to topic/partition
      */
+    // Kafka会在msg序列化和计算分区之前调用onSend()方法来对消息进行相应的定制化操作，
+    // 最好别在里面修改ProducerRecord的topic、partition、key等信息，很容易出现意想不到的问题
     ProducerRecord<K, V> onSend(ProducerRecord<K, V> record);
 
     /**
@@ -86,6 +88,8 @@ public interface ProducerInterceptor<K, V> extends Configurable {
      *                 {@link org.apache.kafka.clients.producer.KafkaProducer#send(ProducerRecord)}.
      * @param exception The exception thrown during processing of this record. Null if no error occurred.
      */
+    // 此方法会在msg被ack前 or 发送失败时被调用，且优先于用户设定的callback执行，该方法抛出的任何异常都会被忽略
+    // 此方法运行在Producer的IO线程中，因此方法实现的代码逻辑越简单越好，否则会影响msg发送的速度
     void onAcknowledgement(RecordMetadata metadata, Exception exception);
 
     /**
