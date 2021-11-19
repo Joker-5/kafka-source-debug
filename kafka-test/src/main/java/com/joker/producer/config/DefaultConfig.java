@@ -20,12 +20,15 @@ public class DefaultConfig {
     }
 
     public static Properties initConfigWithCustomizedPartitioner(String partitionerClassPath) {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ProducerConfig.ACKS_CONFIG, "all");
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        Properties props = initConfig();
         props.put(ProducerConfig.PARTITIONER_CLASS_CONFIG, partitionerClassPath);
+
+        return props;
+    }
+
+    public static Properties initConfigWithCustomizedInterceptor(String interceptorClassPath) {
+        Properties props = initConfig();
+        props.put(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG, interceptorClassPath);
 
         return props;
     }
