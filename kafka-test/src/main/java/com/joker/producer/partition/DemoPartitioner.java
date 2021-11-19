@@ -1,12 +1,16 @@
 package com.joker.producer.partition;
 
+import com.joker.producer.config.DefaultConfig;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Partitioner;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.utils.Utils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -35,5 +39,12 @@ public class DemoPartitioner implements Partitioner {
     @Override
     public void configure(Map<String, ?> configs) {
 
+    }
+
+    public static void main(String[] args) {
+        Properties props = DefaultConfig.initConfigWithCustomizedPartitioner(DemoPartitioner.class.getName());
+        KafkaProducer<String, String> producer = new KafkaProducer<>(props);
+        ProducerRecord<String, String> record = new ProducerRecord<>("topic-demo", "Joker");
+        producer.send(record);
     }
 }
