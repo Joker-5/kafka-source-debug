@@ -1294,6 +1294,7 @@ public class Fetcher<K, V> implements Closeable {
     /**
      * Initialize a CompletedFetch object.
      */
+    // 主要是针对各种异常进行处理，并打印相应的日志
     private CompletedFetch initializeCompletedFetch(CompletedFetch nextCompletedFetch) {
         TopicPartition tp = nextCompletedFetch.partition;
         FetchResponseData.PartitionData partition = nextCompletedFetch.partitionData;
@@ -1302,13 +1303,20 @@ public class Fetcher<K, V> implements Closeable {
         Errors error = Errors.forCode(partition.errorCode());
 
         try {
+            // 判断该分区是否可拉取，如果不可拉取就忽略此条消息。
+            // 判断条件：
+            // 1）当前消费者负载的队列是否包含该分区
+            // 2）当前消费者针对该队列是否被用户设置为暂停（消费端限流）
+            // 3）当前消费者针对该队列是否有有效的拉取偏移量
             if (!subscriptions.hasValidPosition(tp)) {
                 // this can happen when a rebalance happened while fetch is still in-flight
                 log.debug("Ignoring fetched records for partition {} since it no longer has valid position", tp);
+                // 下面分支走的是正常返回的相关逻辑
             } else if (error == Errors.NONE) {
                 // we are interested in this fetch only if the beginning offset matches the
                 // current consumed position
                 FetchPosition position = subscriptions.position(tp);
+                // 如果当前针对该队列的消费位移和发起fetch请求时的offset不一致，则认为本次拉取非法，直接返回null
                 if (position == null || position.offset != fetchOffset) {
                     log.debug("Discarding stale fetch response for partition {} since its offset {} does not match " +
                             "the expected offset {}", tp, fetchOffset, position);
@@ -1317,10 +1325,15 @@ public class Fetcher<K, V> implements Closeable {
 
                 log.trace("Preparing to read {} bytes of data for partition {} with offset {}",
                         FetchResponse.recordsSize(partition), tp, position);
+                // 从返回结构中获取本次拉取的数据，用迭代器，基本数据单位为RecordBatch i.e.一个发送批次
                 Iterator<? extends RecordBatch> batches = FetchResponse.recordsOrFail(partition).batches().iterator();
                 completedFetch = nextCompletedFetch;
 
+                // 如果返回结果中没有包含至少一个批次的消息，但sizeInBytes又>0，则直接抛错，
+                // 根据服务端的版本，其错误信息也有不同，主要是建议我们如何处理
                 if (!batches.hasNext() && FetchResponse.recordsSize(partition) > 0) {
+                    // 如果broker的版本低于0.10.1.0，则建议升级broker版本，或增大客户端的fetch size，
+                    // 这种错误是因为一个batch的消息已经超过了本次拉取允许的最大拉取消息大小
                     if (completedFetch.responseVersion < 3) {
                         // Implement the pre KIP-74 behavior of throwing a RecordTooLargeException.
                         Map<TopicPartition, Long> recordTooLargePartitions = Collections.singletonMap(tp, fetchOffset);
@@ -1338,6 +1351,7 @@ public class Fetcher<K, V> implements Closeable {
                     }
                 }
 
+                // 依次更新消费者本地关于该队列的订阅缓存信息的HW、logStartOffset、lateStableOffset
                 if (partition.highWatermark() >= 0) {
                     log.trace("Updating high watermark for partition {} to {}", tp, partition.highWatermark());
                     subscriptions.updateHighWatermark(tp, partition.highWatermark());
@@ -1363,31 +1377,40 @@ public class Fetcher<K, V> implements Closeable {
                 }
 
                 nextCompletedFetch.initialized = true;
-            } else if (error == Errors.NOT_LEADER_OR_FOLLOWER ||
-                       error == Errors.REPLICA_NOT_AVAILABLE ||
-                       error == Errors.KAFKA_STORAGE_ERROR ||
+                // 如果发送如下几种错误则用debug级别打印错误日志，并向服务端请求元数据然后更新本地缓存
+            } else if (error == Errors.NOT_LEADER_OR_FOLLOWER || // 请求的节点不是该分区的Leader分区
+                       error == Errors.REPLICA_NOT_AVAILABLE || // 分区副本之间无法赋值
+                       error == Errors.KAFKA_STORAGE_ERROR || // 存储异常
                        error == Errors.FENCED_LEADER_EPOCH ||
                        error == Errors.OFFSET_NOT_AVAILABLE) {
+                // 之所以打印的是debug级别是因为Kafka认为上述error是可以恢复的，且对消费不会造成太大的影响
                 log.debug("Error in fetch for partition {}: {}", tp, error.exceptionName());
                 this.metadata.requestUpdate();
+                // 未知主题和分区
             } else if (error == Errors.UNKNOWN_TOPIC_OR_PARTITION) {
+                // 使用warn级别打印错误日志，并更新元数据
                 log.warn("Received unknown topic or partition error in fetch for partition {}", tp);
                 this.metadata.requestUpdate();
+                // 偏移量超过范围
             } else if (error == Errors.OFFSET_OUT_OF_RANGE) {
                 Optional<Integer> clearedReplicaId = subscriptions.clearPreferredReadReplica(tp);
                 if (!clearedReplicaId.isPresent()) {
                     // If there's no preferred replica to clear, we're fetching from the leader so handle this error normally
                     FetchPosition position = subscriptions.position(tp);
+                    // 如果此处拉取的开始偏移量和消费者本地缓存的偏移量不一致，则丢弃，
+                    // 此时说明该消息已过期，打印错误日志
                     if (position == null || fetchOffset != position.offset) {
                         log.debug("Discarding stale fetch response for partition {} since the fetched offset {} " +
                                 "does not match the current offset {}", tp, fetchOffset, position);
                     } else {
+                        // 否则的话则意味着此时的偏移量是非法的，如果有配置重置偏移量策略，则使用其重置偏移量，否则抛错
                         handleOffsetOutOfRange(position, tp);
                     }
                 } else {
                     log.debug("Unset the preferred read replica {} for partition {} since we got {} when fetching {}",
                             clearedReplicaId.get(), tp, error, fetchOffset);
                 }
+                // 没有权限（ACL），直接抛错
             } else if (error == Errors.TOPIC_AUTHORIZATION_FAILED) {
                 //we log the actual partition and not just the topic to help with ACL propagation issues in large clusters
                 log.warn("Not authorized to read from partition {}.", tp);
@@ -1413,22 +1436,25 @@ public class Fetcher<K, V> implements Closeable {
             if (completedFetch == null)
                 nextCompletedFetch.metricAggregator.record(tp, 0, 0);
 
+            // 如果本次拉取的结果不是None（i.e.成功拉取），并且是可恢复的，则将该队列的订阅关系移动到消费者缓存列表的末尾
             if (error != Errors.NONE)
                 // we move the partition to the end if there was an error. This way, it's more likely that partitions for
                 // the same topic can remain together (allowing for more efficient serialization).
                 subscriptions.movePartitionToEnd(tp);
         }
-
+        // 成功拉取，返回拉取到的分区数据
         return completedFetch;
     }
 
     private void handleOffsetOutOfRange(FetchPosition fetchPosition, TopicPartition topicPartition) {
         String errorMessage = "Fetch position " + fetchPosition + " is out of range for partition " + topicPartition;
+        // 配置了重置偏移量策略则重置
         if (subscriptions.hasDefaultOffsetResetPolicy()) {
             log.info("{}, resetting offset", errorMessage);
             subscriptions.requestOffsetReset(topicPartition);
         } else {
             log.info("{}, raising error to the application since no reset policy is configured", errorMessage);
+            // 没配就抛错
             throw new OffsetOutOfRangeException(errorMessage,
                 Collections.singletonMap(topicPartition, fetchPosition.offset));
         }
