@@ -54,14 +54,18 @@ public class ProducerInterceptors<K, V> implements Closeable {
      * @param record the record from client
      * @return producer record to send to topic/partition
      */
+    // 在msg序列化之前会调用此方法，调用形式为链式调用，且此方法并不会抛异常，任何在其中抛出的异常都会被捕获并忽略，
+    // 如果拦截器链中存在拦截器对msg做出修改导致异常发生，则下一个拦截器会使用距其最近的一条正常msg进行相应操作
     public ProducerRecord<K, V> onSend(ProducerRecord<K, V> record) {
         ProducerRecord<K, V> interceptRecord = record;
         for (ProducerInterceptor<K, V> interceptor : this.interceptors) {
             try {
+                // 依次调用每个拦截器的onSend()方法
                 interceptRecord = interceptor.onSend(interceptRecord);
             } catch (Exception e) {
                 // do not propagate interceptor exception, log and continue calling other interceptors
                 // be careful not to throw exception from here
+                // 捕获异常只会打个warn日志，直接将异常忽略
                 if (record != null)
                     log.warn("Error executing interceptor onSend callback for topic: {}, partition: {}", record.topic(), record.partition(), e);
                 else
