@@ -800,7 +800,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * See {@link #send(ProducerRecord, Callback)} for details.
      */
     // 发送消息，此方法默认为async发送
-    // 如果想要实现同步调用的效果，只需对返回结果调用get方法
+    // 如果想要实现同步调用的效果，只需对返回结果调用get方法（get直到结果返回会一直触发阻塞）
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record) {
         return send(record, null);
@@ -916,11 +916,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     // 发送消息，支持回调
     // KafkaProducer的send方法并不会直接向broker发送消息，kafka将消息发送async化
     // 即分解成两个步骤，send方法负责将消息追加到内存中（即分区的缓存队列中）
-    // 然后会由专门的Send线程异步的将缓存中的消息批量发送到Kafka Broker中
+    // 然后会由专门的Sender线程异步的将缓存中的消息批量发送到Kafka Broker中
     @Override
     public Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
         // intercept the record, which can be potentially modified; this method does not throw exceptions
-        // 发送消息之前首先会执行消息发送拦截器，拦截器通过interceptor.classes指定
+        // 发送消息之前首先会执行消息发送拦截器，拦截器通过参数「interceptor.classes」指定
         // 类型为List<String>，每个元素为拦截器的全类路径限定名
         ProducerRecord<K, V> interceptedRecord = this.interceptors.onSend(record);
         // 执行doSend方法
@@ -961,7 +961,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             byte[] serializedKey;
             try {
                 // 此方法需要注意的是虽然该方法传入了topic、headers
-                // 但是实际参与序列化的只有key
+                // 但是实际参与序列化的只有key（看看StringSerializer源码就清楚了）
                 serializedKey = keySerializer.serialize(record.topic(), record.headers(), record.key());
             } catch (ClassCastException cce) {
                 throw new SerializationException("Can't convert key of class " + record.key().getClass().getName() +
@@ -981,7 +981,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             // 默认实现类为DefaultPartitioner
             // 路由算法：
             // 1）如果指定了key，则使用key的hashCode和分区数进行取模
-            // 2）如果未指定key，则轮训所有的分区
+            // 2）如果未指定key，则轮询所有可用的分区
             int partition = partition(record, serializedKey, serializedValue, cluster);
             tp = new TopicPartition(record.topic(), partition);
 
@@ -1007,7 +1007,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             if (transactionManager != null && transactionManager.isTransactional()) {
                 transactionManager.failIfNotReadyForSend();
             }
-            // 将消息追加到缓冲区
+            // 将消息追加到RecordAccumulator缓冲区
             RecordAccumulator.RecordAppendResult result = accumulator.append(tp, timestamp, serializedKey,
                     serializedValue, headers, interceptCallback, remainingWaitMs, true, nowMs);
 
