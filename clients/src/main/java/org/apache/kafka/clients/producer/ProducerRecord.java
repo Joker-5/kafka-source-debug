@@ -50,7 +50,7 @@ public class ProducerRecord<K, V> {
     // 下面是ProducerRecord的核心属性，也是构成消息的六大核心要素
     // 消息所属的主题
     private final String topic;
-    // 消息所在主题的队列数，可以人为指定
+    // 消息所在主题的分区数，可以人为指定
     // 如果指定了key的话，会使用key的hashCode和队列总数进行取模来选择分区
     // 如果前面两者都没有指定的话，则会轮训主题下的所有分区
     private final Integer partition;
@@ -60,7 +60,7 @@ public class ProducerRecord<K, V> {
     private final K key;
     // 消息体
     private final V value;
-    // 消息时间戳，根据topic配置信息message.timestamp.type的值来赋予不同的值
+    // 消息时间戳，根据topic配置信息「message.timestamp.type」的值来赋予不同的值
     private final Long timestamp;
 
     /**
