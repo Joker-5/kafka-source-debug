@@ -64,6 +64,8 @@ import org.slf4j.Logger;
  * The accumulator uses a bounded amount of memory and append calls will block when that memory is exhausted, unless
  * this behavior is explicitly disabled.
  */
+// RecordAccumulator主要用来缓存消息以便Sender线程可以批量发送，
+// 减少网络传送的资源消耗以提升性能
 public final class RecordAccumulator {
 
     private final Logger log;
@@ -76,9 +78,13 @@ public final class RecordAccumulator {
     // 当发生异常重试之前需要等待的时间，默认为100ms，可通过属性「retry.backoff.ms」配置
     private final long retryBackoffMs;
     private final int deliveryTimeoutMs;
+    // 用于实现ByteBuffer的复用，以节约资源，并实现缓冲的高效利用，
+    // 需要注意的是该缓冲池只会对特定大小的ByteBuffer进行管理，大小由参数「batch.size」指定，默认为16K
+    // 其他大小的ByteBuffer并不会被划入到缓冲池中
     private final BufferPool free;
     private final Time time;
     private final ApiVersions apiVersions;
+    // 每个分区都维护了一个Deque，msg写入缓存时会被追加到Deque的tail
     private final ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches;
     private final IncompleteBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
