@@ -1548,8 +1548,11 @@ public class Fetcher<K, V> implements Closeable {
     private class CompletedFetch {
         // 分区信息，返回结果都是以分区为维度的
         private final TopicPartition partition;
+        // 本次fetch操作获取的结果集
         private final Iterator<? extends RecordBatch> batches;
+        // tx相关
         private final Set<Long> abortedProducerIds;
+        // tx相关
         private final PriorityQueue<FetchResponseData.AbortedTransaction> abortedTransactions;
         // 返回的分区数据
         private final FetchResponseData.PartitionData partitionData;
@@ -1558,11 +1561,16 @@ public class Fetcher<K, V> implements Closeable {
         // broker端的版本号
         private final short responseVersion;
 
+        // 已读取的记录条数
         private int recordsRead;
+        // 已读取的记录字节数
         private int bytesRead;
+        // 当前遍历的批次
         private RecordBatch currentBatch;
+        // 该迭代器的最后一条消息
         private Record lastRecord;
         private CloseableIterator<Record> records;
+        // 下次待拉取的offset
         private long nextFetchOffset;
         private Optional<Integer> lastEpoch;
         private boolean isConsumed = false;
