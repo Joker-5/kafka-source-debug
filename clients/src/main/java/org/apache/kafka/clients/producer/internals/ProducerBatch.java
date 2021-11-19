@@ -55,6 +55,7 @@ import static org.apache.kafka.common.record.RecordBatch.NO_TIMESTAMP;
  *
  * This class is not thread safe and external synchronization must be used when modifying it
  */
+// ProducerBatch并不是线程安全的，在进行修改操作时必须要确保其的线程安全性
 public final class ProducerBatch {
 
     private static final Logger log = LoggerFactory.getLogger(ProducerBatch.class);
