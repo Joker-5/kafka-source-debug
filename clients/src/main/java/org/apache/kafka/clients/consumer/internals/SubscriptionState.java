@@ -970,6 +970,7 @@ public class SubscriptionState {
         }
 
         private boolean isFetchable() {
+            // 如果用户主动暂停消费or没有有效position则不可拉取当前消息
             return !paused && hasValidPosition();
         }
 

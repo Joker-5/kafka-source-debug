@@ -736,21 +736,28 @@ public class Fetcher<K, V> implements Closeable {
     }
 
     private List<ConsumerRecord<K, V>> fetchRecords(CompletedFetch completedFetch, int maxRecords) {
+        // 从completedFetch中拉取消息只亲啊，再次判断订阅消息中是否包含当前分区，如果不包含，
+        // 则使用debug打印日志，
+        // 此时极有可能是发送的rebalance
         if (!subscriptions.isAssigned(completedFetch.partition)) {
             // this can happen when a rebalance happened before fetched records are returned to the consumer's poll call
             log.debug("Not returning fetched records for partition {} since it is no longer assigned",
                     completedFetch.partition);
+            // 如果用户主动暂停消费则忽略本次拉取的消息（Kafka消费端如果消费太快是可以进行限流的）
         } else if (!subscriptions.isFetchable(completedFetch.partition)) {
             // this can happen when a partition is paused before fetched records are returned to the consumer's
             // poll call or if the offset is being reset
             log.debug("Not returning fetched records for assigned partition {} since it is no longer fetchable",
                     completedFetch.partition);
         } else {
+            // 从本地消费者缓存中获取该队列已消费的offset，在发送拉取消息时，就是从此偏移量开始拉取的
             FetchPosition position = subscriptions.position(completedFetch.partition);
             if (position == null) {
                 throw new IllegalStateException("Missing position for fetchable partition " + completedFetch.partition);
             }
 
+            // 如果本地缓存的已消费的offset和从服务端拉取的起始offset eq的话，则认为本次fetch是一个有效拉取，
+            // 否则则认为是一个过期的拉取，视为该批消息已被消费
             if (completedFetch.nextFetchOffset == position.offset) {
                 List<ConsumerRecord<K, V>> partRecords = completedFetch.fetchRecords(maxRecords);
 
@@ -766,6 +773,7 @@ public class Fetcher<K, V> implements Closeable {
                     subscriptions.position(completedFetch.partition, nextPosition);
                 }
 
+                // 用sensor收集统计信息
                 Long partitionLag = subscriptions.partitionLag(completedFetch.partition, isolationLevel);
                 if (partitionLag != null)
                     this.sensors.recordPartitionLag(completedFetch.partition, partitionLag);
@@ -775,10 +783,12 @@ public class Fetcher<K, V> implements Closeable {
                     this.sensors.recordPartitionLead(completedFetch.partition, lead);
                 }
 
+                // 返回拉取到的消息，并将结果封装到一个「List<ConsumerRecord<K, V>>」中
                 return partRecords;
             } else {
                 // these records aren't next in line based on the last consumed position, ignore them
                 // they must be from an obsolete request
+                // 本地缓存的已消费的offset和从服务端拉取的起始offset对不上，忽略本次拉取
                 log.debug("Ignoring fetched records for {} at offset {} since the current position is {}",
                         completedFetch.partition, completedFetch.nextFetchOffset, position);
             }
