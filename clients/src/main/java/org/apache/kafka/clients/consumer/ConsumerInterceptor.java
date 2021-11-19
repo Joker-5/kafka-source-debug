@@ -65,6 +65,7 @@ public interface ConsumerInterceptor<K, V> extends Configurable, AutoCloseable {
      * @param records records to be consumed by the client or records returned by the previous interceptors in the list.
      * @return records that are either modified by the interceptor or same as records passed to this method.
      */
+    // 在poll()方法返回之前调用，如果在其中出现异常，仅会将其捕获并记录到日志中
     ConsumerRecords<K, V> onConsume(ConsumerRecords<K, V> records);
 
     /**
@@ -74,6 +75,7 @@ public interface ConsumerInterceptor<K, V> extends Configurable, AutoCloseable {
      *
      * @param offsets A map of offsets by partition with associated metadata
      */
+    // 在提交完消费offset之后调用
     void onCommit(Map<TopicPartition, OffsetAndMetadata> offsets);
 
     /**
