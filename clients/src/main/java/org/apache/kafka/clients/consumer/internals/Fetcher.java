@@ -1238,13 +1238,16 @@ public class Fetcher<K, V> implements Closeable {
 
         long currentTimeMs = time.milliseconds();
 
+        // 获取可发起fetch任务的分区信息
         for (TopicPartition partition : fetchablePartitions()) {
             FetchPosition position = this.subscriptions.position(partition);
             if (position == null) {
                 throw new IllegalStateException("Missing position for fetchable partition " + partition);
             }
 
+            // 如果该分区在客户端本地缓存中则获取该分区的Leader节点信息
             Optional<Node> leaderOpt = position.currentLeader.leader;
+            // 如果Leader节点的信息为空的话，则发起更新元数据请求，本次拉取任务将不会包含该分区
             if (!leaderOpt.isPresent()) {
                 log.debug("Requesting metadata update for partition {} since the position {} is missing the current leader node", partition, position);
                 metadata.requestUpdate();
@@ -1253,16 +1256,20 @@ public class Fetcher<K, V> implements Closeable {
 
             // Use the preferred read replica if set, otherwise the position's leader
             Node node = selectReadReplica(partition, leaderOpt.get(), currentTimeMs);
+            // 如果客户端和node连接未完成，如果是因为权限问题则抛ACL相关异常，
+            // 否则打印trace日志，且本次拉取请求不会包含该分区
             if (client.isUnavailable(node)) {
                 client.maybeThrowAuthFailure(node);
 
                 // If we try to send during the reconnect backoff window, then the request is just
                 // going to be failed anyway before being sent, so skip the send for now
                 log.trace("Skipping fetch for partition {} because node {} is awaiting reconnect backoff", partition, node);
+                // 如果node有挂起的拉取请求，i.e. 发送缓冲区中有待发送的请求，则本次拉取不会包含该分区
             } else if (this.nodesWithPendingFetchRequests.contains(node.id())) {
                 log.trace("Skipping fetch for partition {} because previous request to {} has not been processed", partition, node);
             } else {
                 // if there is a leader and no in-flight requests, issue a new fetch
+                // 构建拉取请求，分节点组织请求
                 FetchSessionHandler.Builder builder = fetchable.get(node);
                 if (builder == null) {
                     int id = node.id();
