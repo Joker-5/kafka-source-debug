@@ -41,6 +41,7 @@ public interface Partitioner extends Configurable, Closeable {
     /**
      * This is called when partitioner is closed.
      */
+    // 负责在partitioner关闭时回收资源
     void close();
 
     /**

@@ -31,6 +31,7 @@ import java.util.Map;
  * 
  * See KIP-480 for details about sticky partitioning.
  */
+// Kafka默认分区器
 public class DefaultPartitioner implements Partitioner {
 
     private final StickyPartitionCache stickyPartitionCache = new StickyPartitionCache();
@@ -64,15 +65,18 @@ public class DefaultPartitioner implements Partitioner {
      */
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster,
                          int numPartitions) {
-        // 未指定key就轮询全部分区
+        // 未指定key就轮询全部「可用」分区！！！（可通过自定义partitioner来打破这一限制）
+        // 而指定key的话会从全部分区中返回一个分区号（不管当前返回的partition是否可用）
         if (keyBytes == null) {
             return stickyPartitionCache.partition(topic, cluster);
         }
         // hash the keyBytes to choose a partition
-        // 指定了key就使用key的hashCode和分区数进行取模
+        // 指定了key就使用key的hashCode和分区数进行取模，具有相同key的
+        // 用MurmurHash2算法，具备高运算性能和低碰撞率
         return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
     }
 
+    // close为空实现
     public void close() {}
     
     /**
