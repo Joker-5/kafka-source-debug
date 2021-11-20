@@ -122,24 +122,35 @@ object AdminUtils extends Logging {
     }
   }
 
-  private def assignReplicasToBrokersRackUnaware(nPartitions: Int,
-                                                 replicationFactor: Int,
-                                                 brokerList: Iterable[Int],
-                                                 fixedStartIndex: Int,
-                                                 startPartitionId: Int): Map[Int, Seq[Int]] = {
+  // 未指定机架时的partition分配策略（partition的replica到底该分配到哪些broker中去）
+  private def assignReplicasToBrokersRackUnaware(nPartitions: Int, // 分区数
+                                                 replicationFactor: Int, // 副本因子
+                                                 brokerList: Iterable[Int], // 集群broker列表
+                                                 fixedStartIndex: Int, // 起始索引 i.e.第一个副本分配的位置，默认为-1
+                                                 startPartitionId: Int): Map[Int, Seq[Int]] = { // 起始分区编号，默认为-1
+    // 保存分区副本分配结果
     val ret = mutable.Map[Int, Seq[Int]]()
+    // brokerId列表
     val brokerArray = brokerList.toArray
+    // 如果起始索引 >= 0就直接用，否则就随机生成一个，以此来保证brokerId是绝对有效的
     val startIndex = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(brokerArray.length)
+    // 保证起始分区号不小于0
     var currentPartitionId = math.max(0, startPartitionId)
+    // 指定副本间隔，以使副本更均匀的分配到不同的broker上
     var nextReplicaShift = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(brokerArray.length)
+    // 遍历全部分区，将每个分区的副本分配到不同的broker上
     for (_ <- 0 until nPartitions) {
       if (currentPartitionId > 0 && (currentPartitionId % brokerArray.length == 0))
         nextReplicaShift += 1
       val firstReplicaIndex = (currentPartitionId + startIndex) % brokerArray.length
       val replicaBuffer = mutable.ArrayBuffer(brokerArray(firstReplicaIndex))
-      for (j <- 0 until replicationFactor - 1)
+      for (j <- 0 until replicationFactor - 1) {
+        // 为其他replicas分配broker
         replicaBuffer += brokerArray(replicaIndex(firstReplicaIndex, nextReplicaShift, j, brokerArray.length))
+      }
+      // 保存该分区所有副本的分配信息
       ret.put(currentPartitionId, replicaBuffer)
+      // 为下一个分区分配副本
       currentPartitionId += 1
     }
     ret
