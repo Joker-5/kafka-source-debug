@@ -30,11 +30,14 @@ object Election {
                                uncleanLeaderElectionEnabled: Boolean,
                                controllerContext: ControllerContext): ElectionResult = {
 
+    // 获取分区副本集
     val assignment = controllerContext.partitionReplicaAssignment(partition)
+    // 获取分区存活副本集
     val liveReplicas = assignment.filter(replica => controllerContext.isReplicaOnline(replica, partition))
     leaderAndIsrOpt match {
       case Some(leaderAndIsr) =>
         val isr = leaderAndIsr.isr
+        // 选举leader的详细算法
         val leaderOpt = PartitionLeaderElectionAlgorithms.offlinePartitionLeaderElection(
           assignment, isr, liveReplicas.toSet, uncleanLeaderElectionEnabled, controllerContext)
         val newLeaderAndIsrOpt = leaderOpt.map { leader =>
@@ -59,12 +62,14 @@ object Election {
    *
    * @return The election results
    */
+  // 当创建分区（创建topic或增加分区）or分区上线（老leader下线）时会触发此选举策略
   def leaderForOffline(
     controllerContext: ControllerContext,
     partitionsWithUncleanLeaderElectionState: Seq[(TopicPartition, Option[LeaderAndIsr], Boolean)]
   ): Seq[ElectionResult] = {
     partitionsWithUncleanLeaderElectionState.map {
       case (partition, leaderAndIsrOpt, uncleanLeaderElectionEnabled) =>
+        // 具体实现
         leaderForOffline(partition, leaderAndIsrOpt, uncleanLeaderElectionEnabled, controllerContext)
     }
   }
@@ -75,6 +80,7 @@ object Election {
     val targetReplicas = controllerContext.partitionFullReplicaAssignment(partition).targetReplicas
     val liveReplicas = targetReplicas.filter(replica => controllerContext.isReplicaOnline(replica, partition))
     val isr = leaderAndIsr.isr
+    // 具体实现
     val leaderOpt = PartitionLeaderElectionAlgorithms.reassignPartitionLeaderElection(targetReplicas, isr, liveReplicas.toSet)
     val newLeaderAndIsrOpt = leaderOpt.map(leader => leaderAndIsr.newLeader(leader))
     ElectionResult(partition, newLeaderAndIsrOpt, targetReplicas)
@@ -89,6 +95,7 @@ object Election {
    *
    * @return The election results
    */
+  // 分区重分配时触发此选举策略
   def leaderForReassign(controllerContext: ControllerContext,
                         leaderAndIsrs: Seq[(TopicPartition, LeaderAndIsr)]): Seq[ElectionResult] = {
     leaderAndIsrs.map { case (partition, leaderAndIsr) =>
@@ -102,6 +109,7 @@ object Election {
     val assignment = controllerContext.partitionReplicaAssignment(partition)
     val liveReplicas = assignment.filter(replica => controllerContext.isReplicaOnline(replica, partition))
     val isr = leaderAndIsr.isr
+    // 具体实现
     val leaderOpt = PartitionLeaderElectionAlgorithms.preferredReplicaPartitionLeaderElection(assignment, isr, liveReplicas.toSet)
     val newLeaderAndIsrOpt = leaderOpt.map(leader => leaderAndIsr.newLeader(leader))
     ElectionResult(partition, newLeaderAndIsrOpt, assignment)
@@ -116,6 +124,7 @@ object Election {
    *
    * @return The election results
    */
+  // 发送优先副本选举时触发此选举策略
   def leaderForPreferredReplica(controllerContext: ControllerContext,
                                 leaderAndIsrs: Seq[(TopicPartition, LeaderAndIsr)]): Seq[ElectionResult] = {
     leaderAndIsrs.map { case (partition, leaderAndIsr) =>
@@ -131,6 +140,7 @@ object Election {
     val liveOrShuttingDownReplicas = assignment.filter(replica =>
       controllerContext.isReplicaOnline(replica, partition, includeShuttingDownBrokers = true))
     val isr = leaderAndIsr.isr
+    // 具体实现
     val leaderOpt = PartitionLeaderElectionAlgorithms.controlledShutdownPartitionLeaderElection(assignment, isr,
       liveOrShuttingDownReplicas.toSet, shuttingDownBrokerIds)
     val newIsr = isr.filter(replica => !shuttingDownBrokerIds.contains(replica))
@@ -147,8 +157,10 @@ object Election {
    *
    * @return The election results
    */
+  // 某broker被优雅关闭时触发此选举策略
   def leaderForControlledShutdown(controllerContext: ControllerContext,
                                   leaderAndIsrs: Seq[(TopicPartition, LeaderAndIsr)]): Seq[ElectionResult] = {
+    // 获取被关闭的brokerId
     val shuttingDownBrokerIds = controllerContext.shuttingDownBrokerIds.toSet
     leaderAndIsrs.map { case (partition, leaderAndIsr) =>
       leaderForControlledShutdown(partition, leaderAndIsr, shuttingDownBrokerIds, controllerContext)

@@ -404,6 +404,7 @@ class ZkPartitionStateMachine(config: KafkaConfig,
       return (failedElections.toMap, Seq.empty)
     }
 
+    // 选举分区leader，共有四种选举策略
     val (partitionsWithoutLeaders, partitionsWithLeaders) = partitionLeaderElectionStrategy match {
       case OfflinePartitionLeaderElectionStrategy(allowUnclean) =>
         val partitionsWithUncleanLeaderElectionState = collectUncleanLeaderElectionState(
@@ -514,27 +515,35 @@ class ZkPartitionStateMachine(config: KafkaConfig,
 
 object PartitionLeaderElectionAlgorithms {
   def offlinePartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int], uncleanLeaderElectionEnabled: Boolean, controllerContext: ControllerContext): Option[Int] = {
+    // 选举策略：按照AR集合中的副本的顺序查找第一个存活的副本，且此副本也在ISR集合中
     assignment.find(id => liveReplicas.contains(id) && isr.contains(id)).orElse {
+      // 如果找不到的话查看是否设置了「unclean.leader.election.enable」参数，
+      // 如果设置了的话就允许从非ISR列表中选举leader
       if (uncleanLeaderElectionEnabled) {
+        // 当从AR集合中找到第一个存活的副本即可标记并返回此节点
         val leaderOpt = assignment.find(liveReplicas.contains)
         if (leaderOpt.isDefined)
           controllerContext.stats.uncleanLeaderElectionRate.mark()
         leaderOpt
       } else {
+        // 找不到就返回
         None
       }
     }
   }
 
   def reassignPartitionLeaderElection(reassignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int]): Option[Int] = {
+    // 找到AR中第一个存活且位于ISR中的即可
     reassignment.find(id => liveReplicas.contains(id) && isr.contains(id))
   }
 
   def preferredReplicaPartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int]): Option[Int] = {
+    // 将优先副本设置为leader（因为leader就是AR集合的第一个存活的副本且也在ISR中）
     assignment.headOption.filter(id => liveReplicas.contains(id) && isr.contains(id))
   }
 
   def controlledShutdownPartitionLeaderElection(assignment: Seq[Int], isr: Seq[Int], liveReplicas: Set[Int], shuttingDownBrokers: Set[Int]): Option[Int] = {
+    // 找到AR中第一个存活 && 处于ISR中 && 不在被关闭的broker中
     assignment.find(id => liveReplicas.contains(id) && isr.contains(id) && !shuttingDownBrokers.contains(id))
   }
 }
