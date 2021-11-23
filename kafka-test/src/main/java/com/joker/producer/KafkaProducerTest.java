@@ -1,4 +1,4 @@
-package com.joker.clients;
+package com.joker.producer;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -9,7 +9,9 @@ import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-// Kafka生产者简单测试
+/**
+ * Kafka生产者简单测试
+ */
 @Slf4j
 public class KafkaProducerTest {
     public static void main(String[] args) {
