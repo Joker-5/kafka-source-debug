@@ -24,6 +24,7 @@ trait TimerTask extends Runnable {
 
   def cancel(): Unit = {
     synchronized {
+      // 从延迟调度中移除自己，表示没有超时，结束本轮超时检测
       if (timerTaskEntry != null) timerTaskEntry.remove()
       timerTaskEntry = null
     }

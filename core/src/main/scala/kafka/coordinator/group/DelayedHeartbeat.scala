@@ -30,6 +30,7 @@ private[group] class DelayedHeartbeat(coordinator: GroupCoordinator,
                                       timeoutMs: Long)
   extends DelayedOperation(timeoutMs, Some(group.lock)) {
 
+  // 核心方法forceComplete
   override def tryComplete(): Boolean = coordinator.tryCompleteHeartbeat(group, memberId, isPending, forceComplete _)
   override def onExpiration(): Unit = coordinator.onExpireHeartbeat(group, memberId, isPending)
   override def onComplete(): Unit = {}

@@ -32,8 +32,8 @@ import kafka.utils.Implicits._
 import kafka.utils.{CoreUtils, Logging}
 import org.apache.kafka.clients.admin.AlterConfigOp.OpType
 import org.apache.kafka.clients.admin.{AlterConfigOp, ConfigEntry}
-import org.apache.kafka.common.acl.AclOperation._
 import org.apache.kafka.common.acl.AclOperation
+import org.apache.kafka.common.acl.AclOperation._
 import org.apache.kafka.common.config.ConfigResource
 import org.apache.kafka.common.errors._
 import org.apache.kafka.common.internals.Topic.{GROUP_METADATA_TOPIC_NAME, TRANSACTION_STATE_TOPIC_NAME, isInternal}
@@ -1712,6 +1712,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     })
   }
 
+  // 发送心跳包
   def handleHeartbeatRequest(request: RequestChannel.Request): Unit = {
     val heartbeatRequest = request.body[HeartbeatRequest]
 
@@ -1742,6 +1743,7 @@ class KafkaApis(val requestChannel: RequestChannel,
               .setErrorCode(Errors.GROUP_AUTHORIZATION_FAILED.code)))
     } else {
       // let the coordinator to handle heartbeat
+      // 协调者心跳处理具体实现
       groupCoordinator.handleHeartbeat(
         heartbeatRequest.data.groupId,
         heartbeatRequest.data.memberId,

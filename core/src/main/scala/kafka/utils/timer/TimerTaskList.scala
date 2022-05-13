@@ -16,12 +16,11 @@
  */
 package kafka.utils.timer
 
-import java.util.concurrent.{Delayed, TimeUnit}
-import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
-
 import kafka.utils.threadsafe
 import org.apache.kafka.common.utils.Time
 
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
+import java.util.concurrent.{Delayed, TimeUnit}
 import scala.math._
 
 @threadsafe
@@ -126,6 +125,7 @@ private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
 
 }
 
+// 双向链表
 private[timer] class TimerTaskEntry(val timerTask: TimerTask, val expirationMs: Long) extends Ordered[TimerTaskEntry] {
 
   @volatile

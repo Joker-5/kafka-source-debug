@@ -16,12 +16,12 @@
  */
 package kafka.utils.timer
 
+import kafka.utils.threadsafe
+import org.apache.kafka.common.utils.{KafkaThread, Time}
+
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import java.util.concurrent.{DelayQueue, Executors, TimeUnit}
-
-import kafka.utils.threadsafe
-import org.apache.kafka.common.utils.{KafkaThread, Time}
 
 trait Timer {
   /**
@@ -79,6 +79,8 @@ class SystemTimer(executorName: String,
   def add(timerTask: TimerTask): Unit = {
     readLock.lock()
     try {
+      // 每个待执行的延迟任务被封装在TimerTaskEntry中
+      // 结构为双向链表，任务过期时间 = 系统当前时间+过期时间（默认10s）
       addTimerTaskEntry(new TimerTaskEntry(timerTask, timerTask.delayMs + Time.SYSTEM.hiResClockMs))
     } finally {
       readLock.unlock()
@@ -86,10 +88,15 @@ class SystemTimer(executorName: String,
   }
 
   private def addTimerTaskEntry(timerTaskEntry: TimerTaskEntry): Unit = {
+    // 重点，时间轮！
+    // 1.尝试将延迟任务添加到时间轮中
     if (!timingWheel.add(timerTaskEntry)) {
       // Already expired or cancelled
-      if (!timerTaskEntry.cancelled)
+      // 2.如果已经过期，将其提交到线程池，触发心跳过期响应逻辑
+      if (!timerTaskEntry.cancelled) {
+        // 该task对应于DelayedOperation中的run方法
         taskExecutor.submit(timerTaskEntry.timerTask)
+      }
     }
   }
 
@@ -98,12 +105,15 @@ class SystemTimer(executorName: String,
    * waits up to timeoutMs before giving up.
    */
   def advanceClock(timeoutMs: Long): Boolean = {
+    // 1.将指针处全部任务拉取出来
     var bucket = delayQueue.poll(timeoutMs, TimeUnit.MILLISECONDS)
     if (bucket != null) {
       writeLock.lock()
       try {
         while (bucket != null) {
+          // 2.推动指针前进
           timingWheel.advanceClock(bucket.getExpiration)
+          // 3.执行addTimerTaskEntry，将其中过期的任务提交到线程池，触发延迟任务执行
           bucket.flush(addTimerTaskEntry)
           bucket = delayQueue.poll()
         }

@@ -16,8 +16,6 @@
  */
 package kafka.coordinator.group
 
-import java.util.Properties
-import java.util.concurrent.atomic.AtomicBoolean
 import kafka.common.OffsetAndMetadata
 import kafka.log.LogConfig
 import kafka.message.ProducerCompressionCodec
@@ -33,6 +31,8 @@ import org.apache.kafka.common.protocol.{ApiKeys, Errors}
 import org.apache.kafka.common.requests._
 import org.apache.kafka.common.utils.Time
 
+import java.util.Properties
+import java.util.concurrent.atomic.AtomicBoolean
 import scala.collection.{Map, Seq, Set, immutable, mutable}
 import scala.math.max
 
@@ -801,6 +801,7 @@ class GroupCoordinator(val brokerId: Int,
     }
   }
 
+  // 心跳处理机制具体实现
   def handleHeartbeat(groupId: String,
                       memberId: String,
                       groupInstanceId: Option[String],
@@ -1191,16 +1192,35 @@ class GroupCoordinator(val brokerId: Int,
     completeAndScheduleNextExpiration(group, member, member.sessionTimeoutMs)
   }
 
+  /**
+   * Kafka心跳处理核心方法
+   * 核心是创建一个心跳延迟任务DelayedHeartbeat，并对其检测是否完成或添加Watch
+   * 启动心跳延迟或等待下一个心跳包到来
+   *
+   * 实现思路总结：
+   * 1.开启一个延迟任务，延迟检查的时间为心跳过期时间，一旦延迟任务执行，意味着心跳超时
+   * 2.当收到一个心跳包，需取消上一次设置的延迟任务
+   * 3.使用可循环使用的延迟任务队列，从而实现类似定时任务的效果
+   *
+   * @param group 消费组元数据
+   * @param member 消费者元数据
+   * @param timeoutMs 心跳超时时间，由消费端「session.timeout.ms」设置，默认10s
+   */
   private def completeAndScheduleNextExpiration(group: GroupMetadata, member: MemberMetadata, timeoutMs: Long): Unit = {
+    // 1.为消费组设置唯一标识 groupId-memberId
     val memberKey = MemberKey(group.groupId, member.memberId)
 
     // complete current heartbeat expectation
+    // 2.heartbeatSatisfied置为true，表示消费者收到一个有效的心跳包
     member.heartbeatSatisfied = true
+    // 3.收到有效的心跳包，通知定时调度器停止本次的心跳过期检测
     heartbeatPurgatory.checkAndComplete(memberKey)
 
     // reschedule the next heartbeat expiration deadline
+    // 4.构建一个DelayedHeartbeat，进入下一个心跳检测周期
     member.heartbeatSatisfied = false
     val delayedHeartbeat = new DelayedHeartbeat(this, group, member.memberId, isPending = false, timeoutMs)
+    // 重要方法
     heartbeatPurgatory.tryCompleteElseWatch(delayedHeartbeat, Seq(memberKey))
   }
 
@@ -1551,20 +1571,23 @@ class GroupCoordinator(val brokerId: Int,
       }
     }
   }
-
+  // 组协调器判断一次心跳检测是否成功，满足下面三个标准的其中之一即可
   def tryCompleteHeartbeat(group: GroupMetadata,
                            memberId: String,
                            isPending: Boolean,
                            forceComplete: () => Boolean): Boolean = {
     group.inLock {
       // The group has been unloaded and invalid, we should complete the heartbeat.
+      // 1.如果消费组状态已经是Dead了
       if (group.is(Dead)) {
         forceComplete()
+      // 2.如果消费组状态为Pending -> 说明在重平衡中
       } else if (isPending) {
         // complete the heartbeat if the member has joined the group
         if (group.has(memberId)) {
           forceComplete()
         } else false
+      // 3.hasSatisfiedHeartbeat为true，说明收到一个有效的心跳包
       } else if (shouldCompleteNonPendingHeartbeat(group, memberId)) {
         forceComplete()
       } else false

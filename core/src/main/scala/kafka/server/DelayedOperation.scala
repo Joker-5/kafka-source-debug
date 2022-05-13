@@ -17,15 +17,14 @@
 
 package kafka.server
 
-import java.util.concurrent._
-import java.util.concurrent.atomic._
-import java.util.concurrent.locks.{Lock, ReentrantLock}
-
 import kafka.metrics.KafkaMetricsGroup
 import kafka.utils.CoreUtils.inLock
 import kafka.utils._
 import kafka.utils.timer._
 
+import java.util.concurrent._
+import java.util.concurrent.atomic._
+import java.util.concurrent.locks.{Lock, ReentrantLock}
 import scala.collection._
 import scala.collection.mutable.ListBuffer
 
@@ -68,7 +67,7 @@ abstract class DelayedOperation(override val delayMs: Long,
   def forceComplete(): Boolean = {
     if (completed.compareAndSet(false, true)) {
       // cancel the timeout timer
-      cancel()
+      cancel() // 取消延迟任务
       onComplete()
       true
     } else {
@@ -118,6 +117,7 @@ abstract class DelayedOperation(override val delayMs: Long,
   /**
    * Thread-safe variant of tryComplete()
    */
+  // tryComplete具体实现在DelayedHeartbeat中
   private[server] def safeTryComplete(): Boolean = inLock(lock)(tryComplete())
 
   /*
@@ -168,7 +168,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
       watchersByKey.values
     }
   }
-
+  // watcherLists数组长度为512
   private val watcherLists = Array.fill[WatcherList](DelayedOperationPurgatory.Shards)(new WatcherList)
   private def watcherList(key: Any): WatcherList = {
     watcherLists(Math.abs(key.hashCode() % watcherLists.length))
@@ -238,8 +238,10 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
 
     // if it cannot be completed by now and hence is watched, add to the expire queue also
     if (!operation.isCompleted) {
-      if (timerEnabled)
+      if (timerEnabled) {
+        // 将延迟任务添加到定时调度中
         timeoutTimer.add(operation)
+      }
       if (operation.isCompleted) {
         // cancel the timer task
         operation.cancel()
@@ -256,10 +258,14 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    * @return the number of completed operations during this process
    */
   def checkAndComplete(key: Any): Int = {
+    // 1.根据key获取WatchList
     val wl = watcherList(key)
+    // 2.从wl内部的ConcurrentHashMap中根据key获取与当前消费者对应的Watch
     val watchers = inLock(wl.watchersLock) { wl.watchersByKey.get(key) }
+    // 3.如果没找到，无需检测，说明之前已经成功检测过了
     val numCompleted = if (watchers == null)
       0
+    // 4.如果找到了，执行后续tryCompleteWatched方法
     else
       watchers.tryCompleteWatched()
     debug(s"Request key $key unblocked $numCompleted $purgatoryName operations")
@@ -358,7 +364,9 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
         val curr = iter.next()
         if (curr.isCompleted) {
           // another thread has completed this operation, just remove it
+          // 心跳检测成功，删除对应的Watch
           iter.remove()
+          // 尝试心跳检测，判断是否成功
         } else if (curr.safeTryComplete()) {
           iter.remove()
           completed += 1
@@ -425,6 +433,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
   /**
    * A background reaper to expire delayed operations that have timed out
    */
+  // 用于驱动时间轮指针
   private class ExpiredOperationReaper extends ShutdownableThread(
     "ExpirationReaper-%d-%s".format(brokerId, purgatoryName),
     false) {

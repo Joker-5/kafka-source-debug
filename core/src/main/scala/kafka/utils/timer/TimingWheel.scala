@@ -124,7 +124,8 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
 
   def add(timerTaskEntry: TimerTaskEntry): Boolean = {
     val expiration = timerTaskEntry.expirationMs
-
+    // 如果返回的是false，意味着触发定时任务的过期
+    // 1.如果任务已经被取消or过期，返回false
     if (timerTaskEntry.cancelled) {
       // Cancelled
       false
@@ -133,6 +134,7 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
       false
     } else if (expiration < currentTime + interval) {
       // Put in its own bucket
+      // 采用多级时间轮结构，如果第一级时间轮放不下的话，则尝试将其放到下一级时间轮中（粒度更粗）
       val virtualId = expiration / tickMs
       val bucket = buckets((virtualId % wheelSize.toLong).toInt)
       bucket.add(timerTaskEntry)
@@ -147,6 +149,7 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
         queue.offer(bucket)
       }
       true
+    // 2.根据过期时间将任务放到时间轮的指定位置
     } else {
       // Out of the interval. Put it into the parent timer
       if (overflowWheel == null) addOverflowWheel()
