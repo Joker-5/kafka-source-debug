@@ -505,7 +505,7 @@ public final class ConsumerCoordinator extends AbstractCoordinator {
                     if (this.metadata.timeToAllowUpdate(timer.currentTimeMs()) == 0) {
                         this.metadata.requestUpdate();
                     }
-
+                    // 确保元数据已经更新
                     if (!client.ensureFreshMetadata(timer)) {
                         return false;
                     }

@@ -51,6 +51,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * is thread-safe, but provides no synchronization for response callbacks. This guarantees that no locks
  * are held when they are invoked.
  */
+// 该类封装了consumer和cluster之间所有网络通信的实现，
+// 需要注意里面的所有操作都是异步的，没有维护任何线程
+// 所有待发送的 Request 都存放在属性 unsent 中，返回的 Response 存放在属性 pendingCompletion 中。
+// 每次调用 poll() 方法的时候，在当前线程中发送所有待发送的 Request，处理所有收到的 Response。
 public class ConsumerNetworkClient implements Closeable {
     private static final int MAX_POLL_TIMEOUT_MS = 5000;
 
@@ -58,7 +62,7 @@ public class ConsumerNetworkClient implements Closeable {
     // flag and the request completion queue below).
     private final Logger log;
     private final KafkaClient client;
-    private final UnsentRequests unsent = new UnsentRequests();
+    private final UnsentRequests unsent = new UnsentRequests(); // 待发送的request
     private final Metadata metadata;
     private final Time time;
     private final long retryBackoffMs;
@@ -71,6 +75,7 @@ public class ConsumerNetworkClient implements Closeable {
 
     // when requests complete, they are transferred to this queue prior to invocation. The purpose
     // is to avoid invoking them while holding this object's monitor which can open the door for deadlocks.
+    // 所有收到的响应
     private final ConcurrentLinkedQueue<RequestFutureCompletionHandler> pendingCompletion = new ConcurrentLinkedQueue<>();
 
     private final ConcurrentLinkedQueue<Node> pendingDisconnects = new ConcurrentLinkedQueue<>();
@@ -128,6 +133,7 @@ public class ConsumerNetworkClient implements Closeable {
         RequestFutureCompletionHandler completionHandler = new RequestFutureCompletionHandler();
         ClientRequest clientRequest = client.newClientRequest(node.idString(), requestBuilder, now, true,
             requestTimeoutMs, completionHandler);
+        // 从此处可见，此时request还没有真正发送给broker，只是被暂存在client.unsent中等待被发送
         unsent.put(node, clientRequest);
 
         // wakeup the client in case it is blocking in poll so that we can send the queued request
@@ -161,6 +167,8 @@ public class ConsumerNetworkClient implements Closeable {
     public boolean awaitMetadataUpdate(Timer timer) {
         int version = this.metadata.requestUpdate();
         do {
+            // poll底层实现，实现与cluster进行通信，在coordinator中注册consumer并拉取&更新元数据
+            // 至此，元数据才会真正进行更新（之前的操作都是简单对元数据对象做属性填充，并没有真正更新）
             poll(timer);
         } while (this.metadata.updateVersion() == version && timer.notExpired());
         return this.metadata.updateVersion() > version;

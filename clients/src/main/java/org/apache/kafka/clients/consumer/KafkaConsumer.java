@@ -1270,7 +1270,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
 
                 if (includeMetadataInTimeout) {
                     // try to update assignment metadata BUT do not need to block on the timer for join group
-                    // 更新相关元数据，为真正向broker发送消息拉取请求做好准备
+                    // 1.更新相关元数据，为真正向broker发送消息拉取请求做好准备
                     updateAssignmentMetadataIfNeeded(timer, false);
                 } else {
                     while (!updateAssignmentMetadataIfNeeded(time.timer(Long.MAX_VALUE), true)) {
@@ -1278,7 +1278,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                     }
                 }
 
-                // 调用pollForFetches向broker拉取消息
+                // 2.调用pollForFetches向broker拉取消息
                 final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = pollForFetches(timer);
                 if (!records.isEmpty()) {
                     // before returning the fetched records, we can send off the next round of fetches
@@ -1328,14 +1328,14 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 Math.min(coordinator.timeToNextPoll(timer.currentTimeMs()), timer.remainingMs());
 
         // if data is available already, return it immediately
-        // 如果数据已经拉回到本地，直接返回数据
+        // 1.如果数据已经拉回到本地（即本地cache中存在未读取的数据），直接返回数据
         final Map<TopicPartition, List<ConsumerRecord<K, V>>> records = fetcher.fetchedRecords();
         if (!records.isEmpty()) {
             return records;
         }
 
         // send any new fetches (won't resend pending fetches)
-        // 组装发送请求，并将器存储在待发送请求列表中
+        // 2.组装发送请求，并将其存储在待发送请求列表中，发送消息
         fetcher.sendFetches();
 
         // We do not want to be stuck blocking in poll if we are missing some positions
@@ -1353,7 +1353,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         log.trace("Polling for fetches with timeout {}", pollTimeout);
 
         Timer pollTimer = time.timer(pollTimeout);
-        // 调用NetworkClient的poll方法发起消息拉取操作（触发网络读写）
+        // 3.调用NetworkClient的poll方法发起消息拉取操作（触发网络读写），直到超时或有消息返回
         client.poll(pollTimer, () -> {
             // since a fetch might be completed by the background thread, we need this poll condition
             // to ensure that we do not block unnecessarily in poll()
@@ -1362,7 +1362,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
         // 更新本次拉取的时间
         timer.update(pollTimer.currentTimeMs());
 
-        // 将从broker拉取到的数据返回（封装成msg）
+        // 4.将返回的response反序列化后转换为消息列表返回给调用者
         return fetcher.fetchedRecords();
     }
 

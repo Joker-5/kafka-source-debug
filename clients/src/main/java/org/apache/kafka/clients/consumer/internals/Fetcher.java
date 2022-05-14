@@ -272,7 +272,7 @@ public class Fetcher<K, V> implements Closeable {
     public synchronized int sendFetches() {
         // Update metrics in case there was an assignment change
         sensors.maybeUpdateAssignment(subscriptions);
-
+        // 1.根据元数据构造request
         // 按节点组装fetch请求
         Map<Node, FetchSessionHandler.FetchRequestData> fetchRequestMap = prepareFetchRequests();
         // 遍历上面获取到的待发送请求，进一步组装请求
@@ -292,13 +292,14 @@ public class Fetcher<K, V> implements Closeable {
                 log.debug("Sending {} {} to broker {}", isolationLevel, data.toString(), fetchTarget);
             }
             // 调用ConsumerNetworkClient的send方法将其发送到发送缓冲区
+            // 2.将请求异步发送（此时还没有发送到broker，点进去看下具体解释）
             RequestFuture<ClientResponse> future = client.send(fetchTarget, request);
             // We add the node to the set of nodes with pending fetch requests before adding the
             // listener because the future may have been fulfilled on another thread (e.g. during a
             // disconnection being handled by the heartbeat thread) which will mean the listener
             // will be invoked synchronously.
             this.nodesWithPendingFetchRequests.add(entry.getKey().id());
-            // 注册事件监听器，当消息从broker中拉取到本地后会触发回调，
+            // 3.注册事件监听器，当消息从broker中拉取到本地后会触发回调，
             // i.e. 消息拉取请求收到返回结果后会将返回结果放到completedFetches中
             future.addListener(new RequestFutureListener<ClientResponse>() {
                 @Override
