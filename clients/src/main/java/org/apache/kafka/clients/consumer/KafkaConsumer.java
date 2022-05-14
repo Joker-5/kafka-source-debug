@@ -589,7 +589,7 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
     private final ConsumerNetworkClient client;
     // 用于管理订阅状态的类，用于跟踪topics、partitions、offsets等信息
     private final SubscriptionState subscriptions;
-    // 消费者元数据信息，包含路由信息
+    // 消费者元数据信息，包含路由信息，集群broker节点、topic、partition在节点上的分布、coordinator给consumer分配的partition信息
     private final ConsumerMetadata metadata;
     // 如果向broker发送请求失败后，发起重试之前需要等待的间隔时间，通过属性「retry.backoff.ms」指定
     private final long retryBackoffMs;
@@ -963,9 +963,19 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
      */
     // 订阅主题，并指定队列重平衡的监听器
     @Override
+    // 需要注意其中的 acquireAndEnsureOpen() 和 try-finally release()
+    // 他们的作用就是保护这个方法只能单线程调用。可以学习一下
+    // Kafka 在文档中明确地注明了 Consumer 不是线程安全的，意味着 Consumer 被并发调用时会出现不可预期的结果。
+    // 为了避免这种情况发生，Kafka 做了主动的检测并抛出异常，而不是放任系统产生不可预期的情况。
+    // Kafka“主动检测不支持的情况并抛出异常，避免系统产生不可预期的行为”这种模式，对于增强的系统的健壮性是一种非常有效的做法。
+    // 如果你的系统不支持用户的某种操作，正确的做法是，检测不支持的操作，
+    // 直接拒绝用户操作，并给出明确的错误提示，而不应该只是在文档中写上“不要这样做”，
+    // 却放任用户错误的操作，产生一些不可预期的、奇怪的错误结果。
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
+        // 1. 判断当前消费者是否已经关闭
         acquireAndEnsureOpen();
         try {
+            // 2.各种参数和状态检查
             maybeThrowInvalidGroupIdException();
             if (topics == null)
                 throw new IllegalArgumentException("Topic collection to subscribe to cannot be null");
@@ -981,7 +991,10 @@ public class KafkaConsumer<K, V> implements Consumer<K, V> {
                 throwIfNoAssignorsConfigured();
                 fetcher.clearBufferedDataForUnassignedTopics(topics);
                 log.info("Subscribed to topic(s): {}", Utils.join(topics, ", "));
+                // 重置订阅状态
                 if (this.subscriptions.subscribe(new HashSet<>(topics), listener))
+                    // 更新元数据，第一次拉消息之前必须更新一次元数据，
+                    // 不然的话consumer就不知道他该去哪个broker中拉取哪个partition的消息了
                     metadata.requestUpdateForNewTopics();
             }
         } finally {
