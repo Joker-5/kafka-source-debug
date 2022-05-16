@@ -1022,6 +1022,7 @@ public class NetworkClient implements KafkaClient {
         }
 
         @Override
+        // 尝试更新元数据
         public long maybeUpdate(long now) {
             // should we update our metadata?
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
@@ -1132,9 +1133,12 @@ public class NetworkClient implements KafkaClient {
             String nodeConnectionId = node.idString();
 
             if (canSendRequest(nodeConnectionId, now)) {
+                // 构造一个更新元数据请求的构造器
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
                 MetadataRequest.Builder metadataRequest = requestAndVersion.requestBuilder;
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
+                // 发送更新元数据的请求，需要注意这个请求并不是立即发送出去的，
+                // 这个请求会被放到待发送的队列中，之后选择一个合适的时间异步批量发送
                 sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
                 inProgress = new InProgressData(requestAndVersion.requestVersion, requestAndVersion.isPartialUpdate);
                 return defaultRequestTimeoutMs;
