@@ -55,7 +55,7 @@ import scala.math._
 // partition的物理实现 -> log
 // 具体的，log是一个文件夹，内部由多个LogSegment组成
 // 下面就是LogSegment的具体实现
-class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
+class LogSegment private[log] (val log: FileRecords,  // 消息日志文件，保存实际的消息对象
                                val lazyOffsetIndex: LazyIndex[OffsetIndex], // 位移索引文件，延迟初始化，降低初始化时间成本
                                val lazyTimeIndex: LazyIndex[TimeIndex], // 时间戳索引文件，延迟初始化，降低初始化时间成本
                                val txnIndex: TransactionIndex,  // 已终止事务索引文件
@@ -344,7 +344,9 @@ class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
    * @throws LogSegmentOffsetOverflowException if the log segment contains an offset that causes the index offset to overflow
    */
   @nonthreadsafe
+  // 核心方法，恢复日志段，broker在启动时会从磁盘上加载所有日志段信息到内存中，并创建相应LogSegment对象实例
   def recover(producerStateManager: ProducerStateManager, leaderEpochCache: Option[LeaderEpochFileCache] = None): Int = {
+    // 1.清空所有索引文件
     offsetIndex.reset()
     timeIndex.reset()
     txnIndex.reset()
@@ -352,23 +354,29 @@ class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
     var lastIndexEntry = 0
     maxTimestampAndOffsetSoFar = TimestampOffset.Unknown
     try {
+      // 2.遍历日志段中所有消息集合
       for (batch <- log.batches.asScala) {
+        // 2.1.确保消息合法
         batch.ensureValid()
+        // 2.2.确保最后一条消息的位移不越界
         ensureOffsetInRange(batch.lastOffset)
 
         // The max timestamp is exposed at the batch level, so no need to iterate the records
+        // 2.3.更新目前最大时间戳与对应的offset
         if (batch.maxTimestamp > maxTimestampSoFar) {
           maxTimestampAndOffsetSoFar = TimestampOffset(batch.maxTimestamp, batch.lastOffset)
         }
 
         // Build offset index
+        // 2.4.更新索引项
         if (validBytes - lastIndexEntry > indexIntervalBytes) {
           offsetIndex.append(batch.lastOffset, validBytes)
           timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)
           lastIndexEntry = validBytes
         }
+        // 2.5.累加读取到的消息字节数
         validBytes += batch.sizeInBytes()
-
+        // 2.6.更新事务生产者状态和Leader Epoch缓存（暂不看）
         if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
           leaderEpochCache.foreach { cache =>
             if (batch.partitionLeaderEpoch >= 0 && cache.latestEpoch.forall(batch.partitionLeaderEpoch > _))
@@ -382,11 +390,14 @@ class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
         warn("Found invalid messages in log segment %s at byte offset %d: %s. %s"
           .format(log.file.getAbsolutePath, validBytes, e.getMessage, e.getCause))
     }
+    // 3.将日志段当前总字节数和累加获取的消息字节数进行比较，
+    // 如果前者比后者大则需要进行截断操作（此时说明日志段写入了一些非法消息）
     val truncated = log.sizeInBytes - validBytes
     if (truncated > 0)
       debug(s"Truncated $truncated invalid bytes at the end of segment ${log.file.getAbsoluteFile} during recovery")
 
     log.truncateTo(validBytes)
+    // 4.调整索引文件的大小
     offsetIndex.trimToValidSize()
     // A normally closed segment always appends the biggest timestamp ever seen into log segment, we do this as well.
     timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar, skipFullCheck = true)
