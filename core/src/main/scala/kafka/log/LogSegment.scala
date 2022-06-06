@@ -52,13 +52,16 @@ import scala.math._
  * @param time The time instance
  */
 @nonthreadsafe
-class LogSegment private[log] (val log: FileRecords,
-                               val lazyOffsetIndex: LazyIndex[OffsetIndex],
-                               val lazyTimeIndex: LazyIndex[TimeIndex],
-                               val txnIndex: TransactionIndex,
-                               val baseOffset: Long,
-                               val indexIntervalBytes: Int,
-                               val rollJitterMs: Long,
+// partition的物理实现 -> log
+// 具体的，log是一个文件夹，内部由多个LogSegment组成
+// 下面就是LogSegment的具体实现
+class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
+                               val lazyOffsetIndex: LazyIndex[OffsetIndex], // 位移索引文件，延迟初始化，降低初始化时间成本
+                               val lazyTimeIndex: LazyIndex[TimeIndex], // 时间戳索引文件，延迟初始化，降低初始化时间成本
+                               val txnIndex: TransactionIndex,  // 已终止事务索引文件
+                               val baseOffset: Long,  // 起始位移，固定不可被修改
+                               val indexIntervalBytes: Int, // 对应于broker端参数「log.index.interval.bytes」，用于控制日志段对象新增索引项的频率
+                               val rollJitterMs: Long,  // 新增日志端时的微扰值
                                val time: Time) extends Logging {
 
   def offsetIndex: OffsetIndex = lazyOffsetIndex.get
@@ -141,27 +144,35 @@ class LogSegment private[log] (val log: FileRecords,
    * @throws LogSegmentOffsetOverflowException if the largest offset causes index offset overflow
    */
   @nonthreadsafe
-  def append(largestOffset: Long,
-             largestTimestamp: Long,
-             shallowOffsetOfMaxTimestamp: Long,
-             records: MemoryRecords): Unit = {
+  // 核心方法，写入消息
+  def append(largestOffset: Long, // 待写入消息批次中消息的最大位移值
+             largestTimestamp: Long,  // 待写入消息批次中消息的最大时间戳
+             shallowOffsetOfMaxTimestamp: Long, // 最大时间戳对应消息的消息位移
+             records: MemoryRecords): Unit = {  // 真正要写入的msg集合
+    // 1.判断待写入msg是否为空
     if (records.sizeInBytes > 0) {
       trace(s"Inserting ${records.sizeInBytes} bytes at end offset $largestOffset at position ${log.sizeInBytes} " +
             s"with largest timestamp $largestTimestamp at shallow offset $shallowOffsetOfMaxTimestamp")
       val physicalPosition = log.sizeInBytes()
+      // 2.判断日志段是否为空
+      // 2.1.如果为空需要记录写入消息的最大时间戳，并将其作为后面新增日志段倒计时的依据
       if (physicalPosition == 0)
         rollingBasedTimestamp = Some(largestTimestamp)
-
+      // 3.确保消息位移合法，判断逻辑为：计算「他与日志段起始位移」的差值是否在整数范围内[0, Integer.MAX_VALUE]
       ensureOffsetInRange(largestOffset)
 
       // append the messages
+      // 4.执行真正的写入操作，将内存中的msg写入page cache
       val appendedBytes = log.append(records)
       trace(s"Appended $appendedBytes to ${log.file} at end offset $largestOffset")
       // Update the in memory max timestamp and corresponding offset.
+      // 5.更新日志段的最大时间戳和其所属消息的位移值属性
       if (largestTimestamp > maxTimestampSoFar) {
         maxTimestampAndOffsetSoFar = TimestampOffset(largestTimestamp, shallowOffsetOfMaxTimestamp)
       }
       // append an entry to the index (if needed)
+      // 6.更新索引项和写入的字节数
+      // 6.1如果写入的字节数已经超过指定大小，则需要新增索引项并清空已写入字节数
       if (bytesSinceLastIndexEntry > indexIntervalBytes) {
         offsetIndex.append(largestOffset, physicalPosition)
         timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)

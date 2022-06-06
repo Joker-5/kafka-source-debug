@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * A {@link Records} implementation backed by a file. An optional start and end position can be applied to this
  * instance to enable slicing a range of the log records.
  */
+// 实际保存Kafka消息的对象
 public class FileRecords extends AbstractRecords implements Closeable {
     private final boolean isSlice;
     private final int start;
