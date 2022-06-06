@@ -298,13 +298,14 @@ class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
    *         or null if the startOffset is larger than the largest offset in this log
    */
   @threadsafe
-  def read(startOffset: Long,
-           maxSize: Int,
-           maxPosition: Long = size,
-           minOneMessage: Boolean = false): FetchDataInfo = {
+  // 核心方法，读取日志
+  def read(startOffset: Long, // 要读取的第一条消息的位移
+           maxSize: Int,  // 读取最大字节数
+           maxPosition: Long = size,  // 能读到的最大文件位置
+           minOneMessage: Boolean = false): FetchDataInfo = { // 是否允许至少返回一条消息，确保不会发生消费饿死的情况
     if (maxSize < 0)
       throw new IllegalArgumentException(s"Invalid max size $maxSize for log read from segment $log")
-
+    // 1.确定要读取的起始文件位置，因为read的第一个形参只是个offset，还不能根据其获取文件
     val startOffsetAndSize = translateOffset(startOffset)
 
     // if the start position is already off the end of the log, return null
@@ -313,7 +314,7 @@ class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
 
     val startPosition = startOffsetAndSize.position
     val offsetMetadata = LogOffsetMetadata(startOffset, this.baseOffset, startPosition)
-
+    // 2.调整能够读取到的最大字节数
     val adjustedMaxSize =
       if (minOneMessage) math.max(maxSize, startOffsetAndSize.size)
       else maxSize
@@ -324,7 +325,7 @@ class LogSegment private[log] (val log: FileRecords,  // 消息日志文件
 
     // calculate the length of the message set to read based on whether or not they gave us a maxOffset
     val fetchSize: Int = min((maxPosition - startPosition).toInt, adjustedMaxSize)
-
+    // 3.从指定位置读取指定大小的消息集合 -> log.slice()方法
     FetchDataInfo(offsetMetadata, log.slice(startPosition, fetchSize),
       firstEntryIncomplete = adjustedMaxSize < startOffsetAndSize.size)
   }
