@@ -50,6 +50,7 @@ object Broker {
  * @param rack        an optional rack
  * @param features    supported features
  */
+// Broker 对象就是一个 <id, endPoint, 机架信息, features> 构成的四元组
 case class Broker(id: Int, endPoints: Seq[EndPoint], rack: Option[String], features: Features[SupportedVersionRange]) {
 
   private val endPointsMap = endPoints.map { endPoint =>

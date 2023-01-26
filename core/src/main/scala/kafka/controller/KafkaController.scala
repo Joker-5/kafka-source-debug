@@ -578,16 +578,24 @@ class KafkaController(val config: KafkaConfig,
    * This callback is invoked by the replica state machine's broker change listener with the list of failed brokers
    * as input. It will call onReplicaBecomeOffline(...) with the list of replicas on those failed brokers as input.
    */
+
+  /**
+   * 为已关闭 Broker 做最后的清扫工作
+   * @param deadBrokers 已终止运行的 Broker Id 列表
+   */
   private def onBrokerFailure(deadBrokers: Seq[Int]): Unit = {
     info(s"Broker failure callback for ${deadBrokers.mkString(",")}")
+    // 更新 Controller 元数据信息，将指定 Broker 从元数据 replicasOnOfflineDirs 中移除
     deadBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
+    // 找到这些 Broker 上的所有副本对象
     val deadBrokersThatWereShuttingDown =
       deadBrokers.filter(id => controllerContext.shuttingDownBrokerIds.remove(id))
     if (deadBrokersThatWereShuttingDown.nonEmpty)
       info(s"Removed ${deadBrokersThatWereShuttingDown.mkString(",")} from list of shutting down brokers.")
+    // 执行副本清扫工作  
     val allReplicasOnDeadBrokers = controllerContext.replicasOnBrokers(deadBrokers.toSet)
     onReplicasBecomeOffline(allReplicasOnDeadBrokers)
-
+    // 取消这些 Broker 上注册的 ZK 监听器
     unregisterBrokerModificationsHandler(deadBrokers)
   }
 
@@ -1630,13 +1638,22 @@ class KafkaController(val config: KafkaConfig,
     }
   }
 
+  /**
+   * 处理主题变更
+   */
   private def processTopicChange(): Unit = {
+    // 如果 Controller 已经关闭，直接返回
     if (!isActive) return
+    // 从 ZK 中获取当前所有 Topic 列表
     val topics = zkClient.getAllTopicsInCluster(true)
+    // ZK 中存在，而当前元数据中不存在的 Topic 视为新增的 Topic
     val newTopics = topics -- controllerContext.allTopics
+    // 当前元数据中存在，而 ZK 中不存在的 Topic 视为已删除的 Topic
     val deletedTopics = controllerContext.allTopics.diff(topics)
+    // 更新 Topic 元数据
     controllerContext.setAllTopics(topics)
 
+    // 为新增和已删除 Topic 执行后续的处理
     registerPartitionModificationsHandlers(newTopics.toSeq)
     val addedPartitionReplicaAssignment = zkClient.getReplicaAssignmentAndTopicIdForTopics(newTopics)
     deletedTopics.foreach(controllerContext.removeTopic)
@@ -2638,9 +2655,12 @@ case class LeaderIsrAndControllerEpoch(leaderAndIsr: LeaderAndIsr, controllerEpo
   }
 }
 
+// 用于表示 Controller 的一些统计信息
 private[controller] class ControllerStats extends KafkaMetricsGroup {
+  // 统计每秒发生的 Unclean Leader 选举次数
   val uncleanLeaderElectionRate = newMeter("UncleanLeaderElectionsPerSec", "elections", TimeUnit.SECONDS)
 
+  // Controller 事件通用的统计速率指标的方法
   val rateAndTimeMetrics: Map[ControllerState, KafkaTimer] = ControllerState.values.flatMap { state =>
     state.rateAndTimeMetricName.map { metricName =>
       state -> new KafkaTimer(newTimer(metricName, TimeUnit.MILLISECONDS, TimeUnit.SECONDS))
