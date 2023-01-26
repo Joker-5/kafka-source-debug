@@ -48,6 +48,9 @@ object ControllerChannelManager {
   val RequestRateAndQueueTimeMetricName = "RequestRateAndQueueTimeMs"
 }
 
+// ControllerChannelManager 类负责：
+// 1) 管理 Controller 与集群 Broker 之间的连接，并为每个 Broker 创建 RequestSendThread 线程实例
+// 2) 将待发送的请求放入对应 Broker 的阻塞队列中，等待该 Broker 专属的  RequestSendThread 线程处理
 class ControllerChannelManager(controllerContext: ControllerContext,
                                config: KafkaConfig,
                                time: Time,
@@ -56,6 +59,12 @@ class ControllerChannelManager(controllerContext: ControllerContext,
                                threadNamePrefix: Option[String] = None) extends Logging with KafkaMetricsGroup {
   import ControllerChannelManager._
 
+  // 核心属性，用一个 Map 存储 Broker 相关信息，具体形式是
+  // <Broker ID, Broker 关键信息>
+  // ControllerBrokerStateInfo 这个类就是一个 POJO 类
+  // 从 POJO 类中存储的信息就可以看出来，Controller 为每个目标 Broker 都创建了一个消息队列
+  // 因为 HashMap 并不是线程安全的，所以 ControllerChannelManager 下面的5个 public 方法都加了 brokerLock 锁，
+  // 以保证 brokerStateInfo 的并发安全性
   protected val brokerStateInfo = new HashMap[Int, ControllerBrokerStateInfo]
   private val brokerLock = new Object
   this.logIdent = "[Channel manager on controller " + config.brokerId + "]: "
@@ -66,6 +75,11 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   )
 
+  /**
+   * Controller 组件在启动时会调用这个方法，
+   * 该方法会从元数据信息中找到集群的 Broker 列表，依次调用 addNewBroker 方法，将这些 Broker 添加到 brokerStateInfo 属性中，
+   * 最后再其次启动 brokerStateInfo 中的 RequestSendThread 线程
+   */
   def startup() = {
     controllerContext.liveOrShuttingDownBrokers.foreach(addNewBroker)
 
@@ -74,12 +88,21 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   }
 
+  /**
+   * 关闭所有 RequestSendThread 进程，并清空必要的资源
+   */
   def shutdown() = {
     brokerLock synchronized {
       brokerStateInfo.values.toList.foreach(removeExistingBroker)
     }
   }
 
+  /**
+   * 发送请求，在这个方法中只是将请求对象提交到阻塞队列中
+   * @param brokerId
+   * @param request
+   * @param callback
+   */
   def sendRequest(brokerId: Int, request: AbstractControlRequest.Builder[_ <: AbstractControlRequest],
                   callback: AbstractResponse => Unit = null): Unit = {
     brokerLock synchronized {
@@ -93,27 +116,45 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   }
 
+  /**
+   * 将指定 Broker 添加到 brokerStateInfo 中，并创建相应的必要资源，
+   * 并启动 RequestSendThread 线程
+   * @param broker
+   */
   def addBroker(broker: Broker): Unit = {
     // be careful here. Maybe the startup() API has already started the request send thread
     brokerLock synchronized {
+      // 如果是新的 Broker
       if (!brokerStateInfo.contains(broker.id)) {
+        // 将这个新的 Broker 加入到 Controller 的管理中，并创建对应的 RequestSendThread 线程
         addNewBroker(broker)
+        // 启动 RequestSendThread 线程
         startRequestSendThread(broker.id)
       }
     }
   }
 
+  /**
+   * 从 brokerStateInfo 中移除指定 Broker 相关数据
+   * @param brokerId
+   */
   def removeBroker(brokerId: Int): Unit = {
     brokerLock synchronized {
       removeExistingBroker(brokerStateInfo(brokerId))
     }
   }
 
+  /**
+   * 将指定 Broker 节点添加到 brokerStateInfo 中，并创建一系列对应资源
+   * @param broker
+   */
   private def addNewBroker(broker: Broker): Unit = {
+    // 为指定 Broker 创建请求阻塞队列
     val messageQueue = new LinkedBlockingQueue[QueueItem]
     debug(s"Controller ${config.brokerId} trying to connect to broker ${broker.id}")
     val controllerToBrokerListenerName = config.controlPlaneListenerName.getOrElse(config.interBrokerListenerName)
     val controllerToBrokerSecurityProtocol = config.controlPlaneSecurityProtocol.getOrElse(config.interBrokerSecurityProtocol)
+    // 获取待连接 Broker 节点信息
     val brokerNode = broker.node(controllerToBrokerListenerName)
     val logContext = new LogContext(s"[Controller id=${config.brokerId}, targetBrokerId=${brokerNode.idString}] ")
     val (networkClient, reconfigurableChannelBuilder) = {
@@ -133,6 +174,7 @@ class ControllerChannelManager(controllerContext: ControllerContext,
           Some(reconfigurable)
         case _ => None
       }
+      // 创建 NIO Selector 实例，用于网络数据传输
       val selector = new Selector(
         NetworkReceive.UNLIMITED,
         Selector.NO_IDLE_TIMEOUT_MS,
@@ -144,6 +186,8 @@ class ControllerChannelManager(controllerContext: ControllerContext,
         channelBuilder,
         logContext
       )
+      // 创建 NetworkClient 实例，
+      // 该类是 Kafka clients 封装的顶层网络客户端 API，其提供了丰富的方法支持网络层 IO 数据传输
       val networkClient = new NetworkClient(
         selector,
         new ManualMetadataUpdater(Seq(brokerNode).asJava),
@@ -163,21 +207,25 @@ class ControllerChannelManager(controllerContext: ControllerContext,
       )
       (networkClient, reconfigurableChannelBuilder)
     }
+    // 设定 RequestSendThread 线程名称
     val threadName = threadNamePrefix match {
       case None => s"Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
       case Some(name) => s"$name:Controller-${config.brokerId}-to-broker-${broker.id}-send-thread"
     }
 
+    // 构造请求处理速率监控指标
     val requestRateAndQueueTimeMetrics = newTimer(
       RequestRateAndQueueTimeMetricName, TimeUnit.MILLISECONDS, TimeUnit.SECONDS, brokerMetricTags(broker.id)
     )
 
+    // 创建 RequestSendThread 实例
     val requestThread = new RequestSendThread(config.brokerId, controllerContext, messageQueue, networkClient,
       brokerNode, config, time, requestRateAndQueueTimeMetrics, stateChangeLogger, threadName)
     requestThread.setDaemon(false)
 
     val queueSizeGauge = newGauge(QueueSizeMetricName, () => messageQueue.size, brokerMetricTags(broker.id))
 
+    // 创建当前 Broker 对应的 ControllerBrokerStateInfo 实例，并将其加入到 brokerStateInfo 进行统一管理
     brokerStateInfo.put(broker.id, ControllerBrokerStateInfo(networkClient, brokerNode, messageQueue,
       requestThread, queueSizeGauge, requestRateAndQueueTimeMetrics, reconfigurableChannelBuilder))
   }
@@ -202,22 +250,31 @@ class ControllerChannelManager(controllerContext: ControllerContext,
     }
   }
 
+  /**
+   * 启动指定 Broker 对应的 RequestSendThread 线程
+   * @param brokerId
+   */
   protected def startRequestSendThread(brokerId: Int): Unit = {
+    // 获取指定 Broker 所对应的 RequestSendThread 线程实例
     val requestThread = brokerStateInfo(brokerId).requestSendThread
-    if (requestThread.getState == Thread.State.NEW)
+    if (requestThread.getState == Thread.State.NEW) {
+      // 启动线程
       requestThread.start()
+    }
   }
 }
 
+// Controller 事件处理线程(生产者)发送的请求在阻塞队列中的存储形式(阻塞队列中的元素)
 case class QueueItem(apiKey: ApiKeys, request: AbstractControlRequest.Builder[_ <: AbstractControlRequest],
                      callback: AbstractResponse => Unit, enqueueTimeMs: Long)
 
-class RequestSendThread(val controllerId: Int,
-                        val controllerContext: ControllerContext,
-                        val queue: BlockingQueue[QueueItem],
-                        val networkClient: NetworkClient,
-                        val brokerNode: Node,
-                        val config: KafkaConfig,
+// RequestSendThread 负责从阻塞队列中取出请求，并将其发往具体的 Broker 中，相当于消费者
+class RequestSendThread(val controllerId: Int, // Controller 所在的 Broker ID
+                        val controllerContext: ControllerContext, // Controller 元数据信息
+                        val queue: BlockingQueue[QueueItem], // 请求的阻塞队列
+                        val networkClient: NetworkClient, // 用于执行请求发送的网络 I/O 类
+                        val brokerNode: Node, // 目标 Broker 节点
+                        val config: KafkaConfig, // Kafka 配置信息
                         val time: Time,
                         val requestRateAndQueueTimeMetrics: Timer,
                         val stateChangeLogger: StateChangeLogger,
@@ -228,6 +285,7 @@ class RequestSendThread(val controllerId: Int,
 
   private val socketTimeoutMs = config.controllerSocketTimeoutMs
 
+  // RequestSendThread 类的核心方法，执行线程的具体逻辑
   override def doWork(): Unit = {
 
     def backoff(): Unit = pause(100, TimeUnit.MILLISECONDS)
@@ -242,13 +300,16 @@ class RequestSendThread(val controllerId: Int,
         // if a broker goes down for a long time, then at some point the controller's zookeeper listener will trigger a
         // removeBroker which will invoke shutdown() on this thread. At that point, we will stop retrying.
         try {
+          // 如果没有创建与目标 Broker 的 TCP 连接，或连接暂时不可用
           if (!brokerReady()) {
             isSendSuccessful = false
+            // 等待重试
             backoff()
           }
           else {
             val clientRequest = networkClient.newClientRequest(brokerNode.idString, requestBuilder,
               time.milliseconds(), true)
+            // 发送请求，等待接收 response
             clientResponse = NetworkClientUtils.sendAndReceive(networkClient, clientRequest, time)
             isSendSuccessful = true
           }
@@ -256,14 +317,17 @@ class RequestSendThread(val controllerId: Int,
           case e: Throwable => // if the send was not successful, reconnect to broker and resend the message
             warn(s"Controller $controllerId epoch ${controllerContext.epoch} fails to send request $requestBuilder " +
               s"to broker $brokerNode. Reconnecting to broker.", e)
+            // 如果出现异常，需要关闭与对应 Broker 的连接
             networkClient.close(brokerNode.idString)
             isSendSuccessful = false
             backoff()
         }
       }
+      // 如果接收到了 Response
       if (clientResponse != null) {
         val requestHeader = clientResponse.requestHeader
         val api = requestHeader.apiKey
+        // Response 的类型必须是 LeaderAndIsrRequest、StopReplicaRequest、UpdateMetadataRequest 中的一种
         if (api != ApiKeys.LEADER_AND_ISR && api != ApiKeys.STOP_REPLICA && api != ApiKeys.UPDATE_METADATA)
           throw new KafkaException(s"Unexpected apiKey received: $apiKey")
 
@@ -273,6 +337,7 @@ class RequestSendThread(val controllerId: Int,
           s"$response for request $api with correlation id " +
           s"${requestHeader.correlationId} sent to broker $brokerNode")
 
+        // 处理回调
         if (callback != null) {
           callback(response)
         }
@@ -673,10 +738,11 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
   }
 }
 
+// POJO 类，存储 Broker 关键信息
 case class ControllerBrokerStateInfo(networkClient: NetworkClient,
-                                     brokerNode: Node,
-                                     messageQueue: BlockingQueue[QueueItem],
-                                     requestSendThread: RequestSendThread,
+                                     brokerNode: Node, // 目标 Broker 节点对象
+                                     messageQueue: BlockingQueue[QueueItem], // 请求消息阻塞队列
+                                     requestSendThread: RequestSendThread, // 发送请求的线程
                                      queueSizeGauge: Gauge[Int],
                                      requestRateAndTimeMetrics: Timer,
                                      reconfigurableChannelBuilder: Option[Reconfigurable])
