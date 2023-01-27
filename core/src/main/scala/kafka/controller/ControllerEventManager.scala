@@ -35,29 +35,45 @@ object ControllerEventManager {
   val EventQueueSizeMetricName = "EventQueueSize"
 }
 
+// Controller 端的事件处理器接口
+
 trait ControllerEventProcessor {
+  // 接收一个 Controller 事件进行处理
   def process(event: ControllerEvent): Unit
+  // 接收一个 Controller 事件进行抢占式处理，目前在源码中只有 ShutdownEventThread 和 Expire 两类事件需要抢占式处理
   def preempt(event: ControllerEvent): Unit
 }
 
+/**
+ * 事件队列中的事件对象
+ * @param event 被放入的事件
+ * @param enqueueTimeMs 事件被放入事件队列时的事件戳
+ */
 class QueuedEvent(val event: ControllerEvent,
                   val enqueueTimeMs: Long) {
+  // 标识事件是否开始被处理，确保 Expire 事件在建立 ZooKeeper 会话前被处理
   val processingStarted = new CountDownLatch(1)
+  // 标识事件是否被处理过
   val spent = new AtomicBoolean(false)
 
+  // 处理事件
   def process(processor: ControllerEventProcessor): Unit = {
+    // 如果已经被处理过就直接返回
     if (spent.getAndSet(true))
       return
     processingStarted.countDown()
+    // 执行处理事件的具体逻辑
     processor.process(event)
   }
 
+  // 抢占式处理事件
   def preempt(processor: ControllerEventProcessor): Unit = {
     if (spent.getAndSet(true))
       return
     processor.preempt(event)
   }
 
+  // 阻塞等待事件被处理完成
   def awaitProcessing(): Unit = {
     processingStarted.await()
   }
@@ -114,21 +130,28 @@ class ControllerEventManager(controllerId: Int,
 
   def isEmpty: Boolean = queue.isEmpty
 
+  // Controller 事件处理线程
   class ControllerEventThread(name: String) extends ShutdownableThread(name = name, isInterruptible = false) {
     logIdent = s"[ControllerEventThread controllerId=$controllerId] "
 
+    // 事件处理核心逻辑
     override def doWork(): Unit = {
+      // 从事件队列中获取待处理的 Controller 事件，获取不到则等待(因为底层用了 take 方法)
       val dequeued = pollFromEventQueue()
       dequeued.event match {
+        // 如果是关闭线程事件，直接跳过，关闭线程由外部执行
         case ShutdownEventThread => // The shutting down of the thread has been initiated at this point. Ignore this event.
         case controllerEvent =>
           _state = controllerEvent.state
 
+          // 更新对应事件在队列中保存的时间
           eventQueueTimeHist.update(time.milliseconds() - dequeued.enqueueTimeMs)
 
           try {
+            // 处理事件
             def process(): Unit = dequeued.process(processor)
 
+            // 并计算处理速率
             rateAndTimeMetrics.get(state) match {
               case Some(timer) => timer.time { process() }
               case None => process()
