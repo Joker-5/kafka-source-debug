@@ -2475,6 +2475,7 @@ class KafkaController(val config: KafkaConfig,
 
   override def process(event: ControllerEvent): Unit = {
     try {
+      // 依次匹配 ControllerEvent 事件
       event match {
         case event: MockEvent =>
           // Used only in test cases
@@ -2537,8 +2538,10 @@ class KafkaController(val config: KafkaConfig,
           processStartup()
       }
     } catch {
+      // 如果 Controller 换成了别的 Broker   
       case e: ControllerMovedException =>
         info(s"Controller moved to another broker when processing $event.", e)
+        // 则执行 Controller 卸任逻辑
         maybeResign()
       case e: Throwable =>
         error(s"Error processing event $event", e)
@@ -2669,7 +2672,9 @@ private[controller] class ControllerStats extends KafkaMetricsGroup {
 
 }
 
+// Controller 事件
 sealed trait ControllerEvent {
+  // 每个 Controller 事件的状态，Controller 在处理具体的事件时会对状态进行相应的变更
   def state: ControllerState
   // preempt() is not executed by `ControllerEventThread` but by the main thread.
   def preempt(): Unit
