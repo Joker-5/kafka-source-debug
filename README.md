@@ -8,5 +8,5 @@ DONE：
 
 参考：
 - [Kafka: a Distributed Messaging System for Log Processing](http://notes.stephenholiday.com/Kafka.pdf)
-- [Kafka 核心源码解读](https://time.geekbang.org/column/article/239512)
+- [Kafka 核心源码解读](https://time.geekbang.org/column/intro/100050101?tab=catalog)
 - [深入理解Kafka：核心设计与实践原理](https://book.douban.com/subject/30437872/)
