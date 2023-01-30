@@ -1746,7 +1746,7 @@ class KafkaController(val config: KafkaConfig,
   }
 
   /**
-   * 处理主题变更
+   * 处理 Topic 变更事件
    */
   private def processTopicChange(): Unit = {
     // 如果 Controller 已经关闭，直接返回
@@ -1761,11 +1761,15 @@ class KafkaController(val config: KafkaConfig,
     controllerContext.setAllTopics(topics)
 
     // 为新增和已删除 Topic 执行后续的处理
+    // 为新增 Topic 注册 Partition 变更监听器，监听分区变更
     registerPartitionModificationsHandlers(newTopics.toSeq)
+    // 从 ZK 获取新增 Topic 的副本分配情况
     val addedPartitionReplicaAssignment = zkClient.getReplicaAssignmentAndTopicIdForTopics(newTopics)
+    // 将已删除 Topic 在元数据中的相关信息删除
     deletedTopics.foreach(controllerContext.removeTopic)
     processTopicIds(addedPartitionReplicaAssignment)
 
+    // 为新增 Topic 更新元数据中的副本分配条目
     addedPartitionReplicaAssignment.foreach { case TopicIdReplicaAssignment(_, _, newAssignments) =>
       newAssignments.foreach { case (topicAndPartition, newReplicaAssignment) =>
         controllerContext.updatePartitionFullReplicaAssignment(topicAndPartition, newReplicaAssignment)
@@ -1773,6 +1777,7 @@ class KafkaController(val config: KafkaConfig,
     }
     info(s"New topics: [$newTopics], deleted topics: [$deletedTopics], new partition replica assignment " +
       s"[$addedPartitionReplicaAssignment]")
+    // 调整新增 Topic 所有分区与所属副本的运行状态为上线状态
     if (addedPartitionReplicaAssignment.nonEmpty) {
       val partitionAssignments = addedPartitionReplicaAssignment
         .map { case TopicIdReplicaAssignment(_, _, partitionsReplicas) => partitionsReplicas.keySet }
@@ -1858,16 +1863,22 @@ class KafkaController(val config: KafkaConfig,
     }
   }
 
+  /**
+   * 处理 Topic 删除事件
+   */
   private def processTopicDeletion(): Unit = {
     if (!isActive) return
+    // 从 ZK 中找到待删除 Topic
     var topicsToBeDeleted = zkClient.getTopicDeletions.toSet
     debug(s"Delete topics listener fired for topics ${topicsToBeDeleted.mkString(",")} to be deleted")
+    // 找到不存在的 Topic
     val nonExistentTopics = topicsToBeDeleted -- controllerContext.allTopics
     if (nonExistentTopics.nonEmpty) {
       warn(s"Ignoring request to delete non-existing topics ${nonExistentTopics.mkString(",")}")
       zkClient.deleteTopicDeletions(nonExistentTopics.toSeq, controllerContext.epochZkVersion)
     }
     topicsToBeDeleted --= nonExistentTopics
+    // 如果 delete.topic.enable 参数 = true，才可以执行 Topic 删除操作
     if (config.deleteTopicEnable) {
       if (topicsToBeDeleted.nonEmpty) {
         info(s"Starting topic deletion for topics ${topicsToBeDeleted.mkString(",")}")
@@ -1880,11 +1891,13 @@ class KafkaController(val config: KafkaConfig,
               reason = "topic reassignment in progress")
         }
         // add topic to deletion list
+        // 将待删除 Topic 添加到等待删除 Topic 集合中，等待 TopicDeletionManager 处理
         topicDeletionManager.enqueueTopicsForDeletion(topicsToBeDeleted)
       }
     } else {
       // If delete topic is disabled remove entries under zookeeper path : /admin/delete_topics
       info(s"Removing $topicsToBeDeleted since delete topic is disabled")
+      // 如果不允许删除的话，则将 "/admin/delete_topics" 下的子节点删掉
       zkClient.deleteTopicDeletions(topicsToBeDeleted.toSeq, controllerContext.epochZkVersion)
     }
   }
@@ -2625,12 +2638,14 @@ class KafkaController(val config: KafkaConfig,
           processRegisterBrokerAndReelect()
         case Expire =>
           processExpire()
+        // Topic 变化事件  
         case TopicChange =>
           processTopicChange()
         case LogDirEventNotification =>
           processLogDirEventNotification()
         case PartitionModifications(topic) =>
           processPartitionModifications(topic)
+        // 处理 Topic 删除事件  
         case TopicDeletion =>
           processTopicDeletion()
         case ApiPartitionReassignment(reassignments, callback) =>
@@ -2691,8 +2706,10 @@ class BrokerModificationsHandler(eventManager: ControllerEventManager, brokerId:
 }
 
 class TopicChangeHandler(eventManager: ControllerEventManager) extends ZNodeChildChangeHandler {
+  // Topic 变化所监听的 ZK 路径："/brokers/topics"
   override val path: String = TopicsZNode.path
 
+  // Topic 发送变化，向事件队列写入 TopicChange 事件
   override def handleChildChange(): Unit = eventManager.put(TopicChange)
 }
 
@@ -2712,9 +2729,12 @@ class PartitionModificationsHandler(eventManager: ControllerEventManager, topic:
   override def handleDataChange(): Unit = eventManager.put(PartitionModifications(topic))
 }
 
+// Topic 删除处理器
 class TopicDeletionHandler(eventManager: ControllerEventManager) extends ZNodeChildChangeHandler {
+  // 监听 ZK 的 "/admin/delete_topics" 路径
   override val path: String = DeleteTopicsZNode.path
 
+  // 向事件队列中写入 TopicDeletion 事件
   override def handleChildChange(): Unit = eventManager.put(TopicDeletion)
 }
 
