@@ -670,8 +670,10 @@ class KafkaController(val config: KafkaConfig,
     unregisterBrokerModificationsHandler(deadBrokers)
   }
 
+  // 处理 Broker 信息更新
   private def onBrokerUpdate(updatedBrokerId: Int): Unit = {
     info(s"Broker info update callback for $updatedBrokerId")
+    // 给集群所有 Broker 发送UpdateMetadataRequest，更新元数据
     sendUpdateMetadataRequest(controllerContext.liveOrShuttingDownBrokerIds.toSeq, Set.empty)
   }
 
@@ -1724,13 +1726,17 @@ class KafkaController(val config: KafkaConfig,
     }
   }
 
+  // 处理 Broker 信息变化
   private def processBrokerModification(brokerId: Int): Unit = {
     if (!isActive) return
+    // 从 ZK 中获取 Broker 具体数据
     val newMetadataOpt = zkClient.getBroker(brokerId)
+    // 从 Controller 元数据中获取 Broker 具体数据
     val oldMetadataOpt = controllerContext.liveOrShuttingDownBroker(brokerId)
     if (newMetadataOpt.nonEmpty && oldMetadataOpt.nonEmpty) {
       val oldMetadata = oldMetadataOpt.get
       val newMetadata = newMetadataOpt.get
+      // 比较二者是否存在差异，如果存在差异的话需要更新 Controller 元数据，并执行 Broker 的逻辑
       if (newMetadata.endPoints != oldMetadata.endPoints || !oldMetadata.features.equals(newMetadata.features)) {
         info(s"Updated broker metadata: $oldMetadata -> $newMetadata")
         controllerContext.updateBrokerMetadata(oldMetadata, newMetadata)
