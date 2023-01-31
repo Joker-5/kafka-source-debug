@@ -33,13 +33,23 @@ import java.util.Optional;
 
 import static org.apache.kafka.common.protocol.ApiKeys.API_VERSIONS;
 
+/**
+ * 请求上下文
+ */
 public class RequestContext implements AuthorizableRequestContext {
+    // Kafka 请求头信息，主要是一些对用户不可见的元信息数据，比如 Request 类型、Request API 版本等
     public final RequestHeader header;
+    // Request 发送方的 TCP 连接串标识，由 Kafka 根据一定规则定义，主要用于表示 TCP 连接
     public final String connectionId;
+    // Request 发送方 IP 地址
     public final InetAddress clientAddress;
+    // Kafka 用户认证类，用于认证授权
     public final KafkaPrincipal principal;
+    // 监听器名称，可以是预定义的监听器（如PLAINTEXT），也可自行定义
     public final ListenerName listenerName;
+    // 安全协议类型，目前支持4种：PLAINTEXT、SSL、SASL_PLAINTEXT、SASL_SSL
     public final SecurityProtocol securityProtocol;
+    // 用户自定义的一些连接方信息
     public final ClientInformation clientInformation;
     public final boolean fromPrivilegedListener;
     public final Optional<KafkaPrincipalSerde> principalSerde;
@@ -83,17 +93,27 @@ public class RequestContext implements AuthorizableRequestContext {
         this.principalSerde = principalSerde;
     }
 
+    /**
+     * 从给定的 ByteBuffer 中提取出 Request 和对应的 Size 值
+     * @param buffer
+     * @return
+     */
     public RequestAndSize parseRequest(ByteBuffer buffer) {
+        // 不支持的 ApiVersions 请求类型视为 V0 版本的请求，不解析，直接返回
         if (isUnsupportedApiVersionsRequest()) {
             // Unsupported ApiVersion requests are treated as v0 requests and are not parsed
             ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest(new ApiVersionsRequestData(), (short) 0, header.apiVersion());
             return new RequestAndSize(apiVersionsRequest, 0);
         } else {
+            // 从请求头获取 ApiKeys 信息
             ApiKeys apiKey = header.apiKey();
             try {
+                // 从请求头获取 Api 版本信息
                 short apiVersion = header.apiVersion();
+                // 解析请求并返回
                 return AbstractRequest.parseRequest(apiKey, apiVersion, buffer);
             } catch (Throwable ex) {
+                // 在解析过程中出现任何异常都视为无效请求，直接抛异常
                 throw new InvalidRequestException("Error getting request for apiKey: " + apiKey +
                         ", apiVersion: " + header.apiVersion() +
                         ", connectionId: " + connectionId +
