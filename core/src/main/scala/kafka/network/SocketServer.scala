@@ -85,6 +85,9 @@ class SocketServer(val config: KafkaConfig,
                    val apiVersionManager: ApiVersionManager)
   extends Logging with KafkaMetricsGroup with BrokerReconfigurable {
 
+  /**
+   * SocketServer 请求队列长度，由参数 queued.max.requests 指定，默认500
+   */
   private val maxQueuedRequests = config.queuedMaxRequests
 
   private val nodeId = config.brokerId
@@ -98,13 +101,31 @@ class SocketServer(val config: KafkaConfig,
   private val memoryPoolDepletedTimeMetricName = metrics.metricName("MemoryPoolDepletedTimeTotal", MetricsGroup)
   memoryPoolSensor.add(new Meter(TimeUnit.MILLISECONDS, memoryPoolDepletedPercentMetricName, memoryPoolDepletedTimeMetricName))
   private val memoryPool = if (config.queuedMaxBytes > 0) new SimpleMemoryPool(config.queuedMaxBytes, config.socketRequestMaxBytes, false, memoryPoolSensor) else MemoryPool.NONE
-  // data-plane
+  // data-plane 数据面，数据类请求有 FETCH、PRODUCE 等
+  /**
+   * 处理数据类请求的 Processor 线程池
+   */
   private val dataPlaneProcessors = new ConcurrentHashMap[Int, Processor]()
+  /**
+   * 处理数据类请求的 Acceptor 线程池，每套监听器对应一个 Acceptor 线程
+   */
   private[network] val dataPlaneAcceptors = new ConcurrentHashMap[EndPoint, Acceptor]()
+  /**
+   * 处理数据类请求的请求队列，长度由参数 queued.max.requests 指定，默认500
+   */
   val dataPlaneRequestChannel = new RequestChannel(maxQueuedRequests, DataPlaneMetricPrefix, time, apiVersionManager.newRequestMetrics)
-  // control-plane
+  // control-plane 控制面，控制类请求有 LeaderAndIsrRequest、StopReplicaRequest、UpdateMetadataRequest
+  /**
+   * 处理控制类请求的 Processor 线程，只有一个线程
+   */
   private var controlPlaneProcessorOpt : Option[Processor] = None
+  /**
+   * 处理控制类请求的 Acceptor 线程，只有一个线程
+   */
   private[network] var controlPlaneAcceptorOpt : Option[Acceptor] = None
+  /**
+   * 处理控制类请求的请求队列，注意容量写死了就是 queueSize = 20
+   */
   val controlPlaneRequestChannelOpt: Option[RequestChannel] = config.controlPlaneListenerName.map(_ =>
     new RequestChannel(20, ControlPlaneMetricPrefix, time, apiVersionManager.newRequestMetrics))
 
@@ -186,12 +207,17 @@ class SocketServer(val config: KafkaConfig,
    *
    * @param authorizerFutures Future per [[EndPoint]] used to wait before starting the processor
    *                          corresponding to the [[EndPoint]]
+   *                          
+   * 启动控制面和数据面所有线程                         
    */
   def startProcessingRequests(authorizerFutures: Map[Endpoint, CompletableFuture[Void]] = Map.empty): Unit = {
     info("Starting socket server acceptors and processors")
     this.synchronized {
+      // startedProcessingRequests 默认是 false (private var startedProcessingRequests = false)
       if (!startedProcessingRequests) {
+        // 启动所有处理控制类请求的 Processor 和 Acceptor
         startControlPlaneProcessorAndAcceptor(authorizerFutures)
+        // 启动所有处理数据类请求的 Processor 和 Acceptor
         startDataPlaneProcessorsAndAcceptors(authorizerFutures)
         startedProcessingRequests = true
       } else {
@@ -231,8 +257,11 @@ class SocketServer(val config: KafkaConfig,
    *
    * We start inter-broker listener before other listeners. This allows authorization metadata for
    * other listeners to be stored in Kafka topics in this cluster.
+   * 
+   * 启动所有处理数据类请求的 Processor 和 Acceptor 线程
    */
   private def startDataPlaneProcessorsAndAcceptors(authorizerFutures: Map[Endpoint, CompletableFuture[Void]]): Unit = {
+    // 获取 Broker 间通信所用的监听器，默认是 PLAINTEXT
     val interBrokerListener = dataPlaneAcceptors.asScala.keySet
       .find(_.listenerName == config.interBrokerListenerName)
     val orderedAcceptors = interBrokerListener match {
@@ -242,45 +271,70 @@ class SocketServer(val config: KafkaConfig,
     }
     orderedAcceptors.foreach { acceptor =>
       val endpoint = acceptor.endPoint
+      // 启动 Processor 和 Acceptor 线程
       startAcceptorAndProcessors(DataPlaneThreadPrefix, endpoint, acceptor, authorizerFutures)
     }
   }
 
   /**
    * Start the processor of control-plane acceptor and the acceptor of this server.
+   * 
+   * 启动所有处理控制类请求的 Processor 和 Acceptor
    */
   private def startControlPlaneProcessorAndAcceptor(authorizerFutures: Map[Endpoint, CompletableFuture[Void]]): Unit = {
     controlPlaneAcceptorOpt.foreach { controlPlaneAcceptor =>
+      // 获取监听器
       val endpoint = config.controlPlaneListener.get
+      // 启动 Processor 和 Acceptor 线程
       startAcceptorAndProcessors(ControlPlaneThreadPrefix, endpoint, controlPlaneAcceptor, authorizerFutures)
     }
   }
 
   private def endpoints = config.listeners.map(l => l.listenerName -> l).toMap
 
+  /**
+   * 为 Data Plane 创建所需资源
+   * @param dataProcessorsPerListener 数据面监听器 Processor 线程数
+   * @param endpoints 监听器集合
+   */
   private def createDataPlaneAcceptorsAndProcessors(dataProcessorsPerListener: Int,
                                                     endpoints: Seq[EndPoint]): Unit = {
+    // 遍历监听器集合
     endpoints.foreach { endpoint =>
+      // 将监听器添加到连接限额管理中
       connectionQuotas.addListener(config, endpoint.listenerName)
+      // 创建监听器对应的 Acceptor 线程
       val dataPlaneAcceptor = createAcceptor(endpoint, DataPlaneMetricPrefix)
+      // 创建监听器对应的 Processor 线程，具体数量由 num.network.threads 参数指定
       addDataPlaneProcessors(dataPlaneAcceptor, endpoint, dataProcessorsPerListener)
+      // 将 <监听器, Acceptor 线程> 保存到线程池中管理
       dataPlaneAcceptors.put(endpoint, dataPlaneAcceptor)
       info(s"Created data-plane acceptor and processors for endpoint : ${endpoint.listenerName}")
     }
   }
 
+  /**
+   * 为 Control Plane 创建所需资源
+   * @param endpointOpt 监听器集合
+   */
   private def createControlPlaneAcceptorAndProcessor(endpointOpt: Option[EndPoint]): Unit = {
+    // 遍历监听器集合
     endpointOpt.foreach { endpoint =>
+      // 将监听器添加到连接限额管理中
       connectionQuotas.addListener(config, endpoint.listenerName)
+      // 创建监听器对应的 Acceptor 线程
       val controlPlaneAcceptor = createAcceptor(endpoint, ControlPlaneMetricPrefix)
+      // 创建监听器对应的 Processor 线程，这里只会创建一个
       val controlPlaneProcessor = newProcessor(nextProcessorId, controlPlaneRequestChannelOpt.get,
         connectionQuotas, endpoint.listenerName, endpoint.securityProtocol, memoryPool, isPrivilegedListener = true)
       controlPlaneAcceptorOpt = Some(controlPlaneAcceptor)
       controlPlaneProcessorOpt = Some(controlPlaneProcessor)
       val listenerProcessors = new ArrayBuffer[Processor]()
       listenerProcessors += controlPlaneProcessor
+      // 将 Processor 线程添加到控制面请求队列中
       controlPlaneRequestChannelOpt.foreach(_.addProcessor(controlPlaneProcessor))
       nextProcessorId += 1
+      // 将 Processor 添加到 Acceptor 线程管理的 Processor 线程池中
       controlPlaneAcceptor.addProcessors(listenerProcessors, ControlPlaneThreadPrefix)
       info(s"Created control-plane acceptor and processor for endpoint : ${endpoint.listenerName}")
     }
@@ -463,10 +517,17 @@ object SocketServer {
   val DataPlaneMetricPrefix = ""
   val ControlPlaneMetricPrefix = "ControlPlane"
 
+  /**
+   * 定义一些可以动态修改的配置，也就是 Broker 在启动时还可以修改的配置
+   */
   val ReconfigurableConfigs = Set(
+    // max.connections.per.ip
     KafkaConfig.MaxConnectionsPerIpProp,
+    // max.connections.per.ip.overrides
     KafkaConfig.MaxConnectionsPerIpOverridesProp,
+    // max.connections
     KafkaConfig.MaxConnectionsProp,
+    // max.connection.creation.rate
     KafkaConfig.MaxConnectionCreationRateProp)
 
   val ListenerReconfigurableConfigs = Set(KafkaConfig.MaxConnectionsProp, KafkaConfig.MaxConnectionCreationRateProp)

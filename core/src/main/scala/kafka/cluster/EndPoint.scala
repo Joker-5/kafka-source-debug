@@ -61,8 +61,15 @@ object EndPoint {
 
 /**
  * Part of the broker definition - matching host/port pair to a protocol
+ * 
+ * Kafka 监听器实现类
+ * @param host Broker 主机名
+ * @param port Broker 端口号
+ * @param listenerName 监听器名，支持自定义
+ * @param securityProtocol 监听器使用的安全协议
  */
 case class EndPoint(host: String, port: Int, listenerName: ListenerName, securityProtocol: SecurityProtocol) {
+  // 构造完整的监听器连接字符串，格式为 ${listenerName}://${host}:${port}
   def connectionString: String = {
     val hostport =
       if (host == null)
@@ -72,6 +79,10 @@ case class EndPoint(host: String, port: Int, listenerName: ListenerName, securit
     listenerName.value + "://" + hostport
   }
 
+  /**
+   * 构造 Java 版本的 Endpoint 类
+   * @return
+   */
   def toJava: JEndpoint = {
     new JEndpoint(listenerName.value, securityProtocol, host, port)
   }
