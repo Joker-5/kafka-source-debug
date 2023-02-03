@@ -1862,15 +1862,24 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
     }
   }
 
+  /**
+   * 获取控制面监听器名和安全协议
+   * @return <监听器名, 安全协议>
+   */
   private def getControlPlaneListenerNameAndSecurityProtocol: Option[(ListenerName, SecurityProtocol)] = {
+    // 根据 control.plane.listener.name 参数找配置信息，看是否启动了 Control Plane 监听器
     Option(getString(KafkaConfig.ControlPlaneListenerNameProp)) match {
+      // 存在 Control Plane 监听器
       case Some(name) =>
         val listenerName = ListenerName.normalised(name)
+        // 监听器必须同时设置 listener.security.protocol.map 协议配置，负责报错
         val securityProtocol = listenerSecurityProtocolMap.getOrElse(listenerName,
           throw new ConfigException(s"Listener with ${listenerName.value} defined in " +
             s"${KafkaConfig.ControlPlaneListenerNameProp} not found in ${KafkaConfig.ListenerSecurityProtocolMapProp}."))
+        // 返回 <监听器名, 安全协议>
         Some(listenerName, securityProtocol)
 
+      // 没找到说明没有启动  Control Plane 监听器
       case None => None
    }
   }
@@ -1883,7 +1892,12 @@ class KafkaConfig(val props: java.util.Map[_, _], doLog: Boolean, dynamicConfigO
     }
   }
 
+  /**
+   * 建立 <监听器名, 协议名> 的 Map
+   * @return
+   */
   def listenerSecurityProtocolMap: Map[ListenerName, SecurityProtocol] = {
+    // 协议由 listener.security.protocol.map 参数指定
     getMap(KafkaConfig.ListenerSecurityProtocolMapProp, getString(KafkaConfig.ListenerSecurityProtocolMapProp))
       .map { case (listenerName, protocolName) =>
       ListenerName.normalised(listenerName) -> getSecurityProtocol(protocolName, KafkaConfig.ListenerSecurityProtocolMapProp)

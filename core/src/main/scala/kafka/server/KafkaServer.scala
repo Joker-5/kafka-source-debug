@@ -177,6 +177,8 @@ class KafkaServer(
   /**
    * Start up API for bringing up a single instance of the Kafka server.
    * Instantiates the LogManager, the SocketServer and the request handlers - KafkaRequestHandlers
+   * 
+   * 启动 Kafka Broker 实例
    */
   override def startup(): Unit = {
     try {
@@ -292,7 +294,9 @@ class KafkaServer(
         //
         // Note that we allow the use of KRaft mode controller APIs when forwarding is enabled
         // so that the Envelope request is exposed. This is only used in testing currently.
+        // 创建 SocketServer 组件
         socketServer = new SocketServer(config, metrics, time, credentialProvider, apiVersionManager)
+        // 启动 SocketServer，注意在这里不会启动 Processor 线程(startProcessingRequests = false)
         socketServer.startup(startProcessingRequests = false)
 
         /* start replica manager */
@@ -326,6 +330,7 @@ class KafkaServer(
         tokenManager.startup()
 
         /* start kafka controller */
+        // 启动 Controller
         kafkaController = new KafkaController(config, zkClient, time, metrics, brokerInfo, brokerEpoch, tokenManager, brokerFeatures, featureCache, threadNamePrefix)
         kafkaController.startup()
 
@@ -418,6 +423,7 @@ class KafkaServer(
         dynamicConfigManager = new DynamicConfigManager(zkClient, dynamicConfigHandlers)
         dynamicConfigManager.startup()
 
+        // 启动控制面和数据面所有线程
         socketServer.startProcessingRequests(authorizerFutures)
 
         _brokerState = BrokerState.RUNNING
