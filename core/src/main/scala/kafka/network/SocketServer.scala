@@ -795,13 +795,16 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
     val ready = nioSelector.select(500)
     // 存在 I/O 事件就绪
     if (ready > 0) {
+      // 获取对应的 SelectionKey 集合
       val keys = nioSelector.selectedKeys()
       val iter = keys.iterator()
+      // 遍历这些 SelectionKey
       while (iter.hasNext && isRunning) {
         try {
           val key = iter.next
           iter.remove()
 
+          // 测试 SelectionKey 的底层通道是否能接受新的 Socket 连接
           if (key.isAcceptable) {
             // 调用 accept 方法创建 Socket 连接
             accept(key).foreach { socketChannel =>
@@ -821,6 +824,7 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
                 }
                 // 更新 Processor 线程序号
                 currentProcessorIndex += 1
+                // 将新 Socket 连接加入到 Processor 线程待处理连接队列中，等待后续处理
               } while (!assignNewConnection(socketChannel, processor, retriesLeft == 0))
             }
           } else
@@ -872,6 +876,13 @@ private[kafka] class Acceptor(val endPoint: EndPoint,
     }
   }
 
+  /**
+   * 将 Acceptor 新建的 SocketChannel 对象存入 Processors 线程的 newConnections 队列中。
+   * @param socketChannel
+   * @param processor
+   * @param mayBlock
+   * @return
+   */
   private def assignNewConnection(socketChannel: SocketChannel, processor: Processor, mayBlock: Boolean): Boolean = {
     if (processor.accept(socketChannel, mayBlock, blockedPercentMeter)) {
       debug(s"Accepted connection from ${socketChannel.socket.getRemoteSocketAddress} on" +
@@ -1082,6 +1093,9 @@ private[kafka] class Processor(val id: Int,
     processException(errorMessage, throwable)
   }
 
+  /**
+   * 将 Response 发送给请求方
+   */
   private def processNewResponses(): Unit = {
     var currentResponse: RequestChannel.Response = null
     // 如果 Response 队列中存在待处理 Response
@@ -1176,6 +1190,7 @@ private[kafka] class Processor(val id: Int,
     // 遍历所有已接收到的 Request
     selector.completedReceives.forEach { receive =>
       try {
+        // 打开与发送方对应的 SocketChannel，如果不存在可用的 Channel，就直接抛异常，
         // 保证对应的连接通道已经建立
         openOrClosingChannel(receive.source) match {
           case Some(channel) =>
@@ -1197,6 +1212,7 @@ private[kafka] class Processor(val id: Int,
                   channel.principal, listenerName, securityProtocol,
                   channel.channelMetadataRegistry.clientInformation, isPrivilegedListener, channel.principalSerde)
 
+                // 根据 Channel 中获取的 Receive 对象，构建 Request 对象
                 val req = new RequestChannel.Request(processor = id, context = context,
                   startTimeNanos = nowNanos, memoryPool, receive.payload, requestChannel.metrics, None)
 
@@ -1210,7 +1226,7 @@ private[kafka] class Processor(val id: Int,
                       apiVersionsRequest.data.clientSoftwareVersion))
                   }
                 }
-                // 这个方法中最重要的代码，将 Request 添加到请求队列中
+                // 这个方法中最重要的代码，将构造的 Request 添加到请求队列中
                 requestChannel.sendRequest(req)
                 selector.mute(connectionId)
                 handleChannelMuteEvent(connectionId, ChannelMuteEvent.REQUEST_RECEIVED)

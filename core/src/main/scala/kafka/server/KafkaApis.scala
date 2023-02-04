@@ -86,6 +86,26 @@ import scala.util.{Failure, Success, Try}
 
 /**
  * Logic to handle the various Kafka requests
+ * 
+ * @param requestChannel 请求队列
+ * @param metadataSupport
+ * @param replicaManager 副本管理器
+ * @param groupCoordinator 消费者组协调器
+ * @param txnCoordinator 事务管理器
+ * @param autoTopicCreationManager
+ * @param brokerId broker.id 配置对应的值
+ * @param config Kafka 配置
+ * @param configRepository
+ * @param metadataCache 元数据缓存
+ * @param metrics
+ * @param authorizer
+ * @param quotas 限额管理器
+ * @param fetchManager
+ * @param brokerTopicStats
+ * @param clusterId
+ * @param time
+ * @param tokenManager
+ * @param apiVersionManager
  */
 class KafkaApis(val requestChannel: RequestChannel,
                 val metadataSupport: MetadataSupport,
@@ -154,7 +174,7 @@ class KafkaApis(val requestChannel: RequestChannel,
   /**
    * Top-level method that handles all requests and multiplexes to the right api
    */
-  // 处理客户端发来的各种请求
+  // 处理客户端发来的各种请求，根据请求头部信息中的 apiKey 字段判断属于哪类请求，然后调用响应的 handle*** 方法
   override def handle(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
     try {
       trace(s"Handling request:${request.requestDesc(true)} from connection ${request.context.connectionId};" +
