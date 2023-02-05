@@ -309,14 +309,21 @@ class ControllerContext {
     allTopics ++= topics
   }
 
+  /**
+   * 删除 Topic 在元数据中的相关信息
+   * @param topic 待删除的 Topic
+   */
   def removeTopic(topic: String): Unit = {
     // Metric is cleaned when the topic is queued up for deletion so
     // we don't clean it twice. We clean it only if it is deleted
     // directly.
     if (!topicsToBeDeleted.contains(topic))
       cleanPreferredReplicaImbalanceMetric(topic)
+    // 将 Topic 从待删除主题列表移除  
     topicsToBeDeleted -= topic
+    // 将 Topic 从已开始删除主题列表移除
     topicsWithDeletionStarted -= topic
+    // 将 Topic 从集群主题列表中移除
     allTopics -= topic
     topicIds.remove(topic).foreach { topicId =>
       topicNames.remove(topicId)

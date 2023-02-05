@@ -125,7 +125,7 @@ class KafkaController(val config: KafkaConfig,
   // 分区状态机，负责分区状态转换  
   val partitionStateMachine: PartitionStateMachine = new ZkPartitionStateMachine(config, stateChangeLogger, controllerContext, zkClient,
     new ControllerBrokerRequestBatch(config, controllerChannelManager, eventManager, controllerContext, stateChangeLogger))
-  // 主题删除管理器，负责删除主题与日志  
+  // 主题删除管理器，负责执行删除 Topic 相关操作
   val topicDeletionManager = new TopicDeletionManager(config, controllerContext, replicaStateMachine,
     partitionStateMachine, new ControllerDeletionClient(this, zkClient))
 
