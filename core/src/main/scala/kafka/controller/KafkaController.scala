@@ -119,7 +119,12 @@ class KafkaController(val config: KafkaConfig,
 
   private val brokerRequestBatch = new ControllerBrokerRequestBatch(config, controllerChannelManager,
     eventManager, controllerContext, stateChangeLogger)
-  // 副本状态机，负责副本状态转换
+  /**
+   *  副本状态机，负责副本状态转换，
+   *  需要注意的是，所有 Broker 在启动时都会创建 Controller 实例，因而都会创建副本状态机实例，
+   *  但是，只有被选举为 Controller 的 Broker 才会启动这个副本状态机实例，
+   *  下面的分区状态机同理
+   */
   val replicaStateMachine: ReplicaStateMachine = new ZkReplicaStateMachine(config, stateChangeLogger, controllerContext, zkClient,
     new ControllerBrokerRequestBatch(config, controllerChannelManager, eventManager, controllerContext, stateChangeLogger))
   // 分区状态机，负责分区状态转换  
@@ -306,7 +311,9 @@ class KafkaController(val config: KafkaConfig,
     info("Sending update metadata request")
     sendUpdateMetadataRequest(controllerContext.liveOrShuttingDownBrokerIds.toSeq, Set.empty)
 
+    // 启动副本状态机
     replicaStateMachine.startup()
+    // 启动分区状态机
     partitionStateMachine.startup()
 
     info(s"Ready to serve as the new controller with epoch $epoch")
