@@ -456,6 +456,11 @@ class ControllerContext {
       Some(replicaAssignment), Some(leaderIsrAndControllerEpoch))
   }
 
+  /**
+   * 从 Controller 元数据缓存中获取分区当前信息，包括 Leader信息、ISR 有哪些副本等
+   * @param partition
+   * @return
+   */
   def partitionLeadershipInfo(partition: TopicPartition): Option[LeaderIsrAndControllerEpoch] = {
     partitionLeadershipInfo.get(partition)
   }
