@@ -411,6 +411,10 @@ abstract class AbstractControllerBrokerRequestBatch(config: KafkaConfig,
                   request: AbstractControlRequest.Builder[_ <: AbstractControlRequest],
                   callback: AbstractResponse => Unit = null): Unit
 
+  /**
+   * 清空 Controller 待发送请求集合，准备发送本次请求，
+   * 这里的清空是指如果请求集合不为空，就会直接报错
+   */
   def newBatch(): Unit = {
     // raise error if the previous batch is not empty
     if (leaderAndIsrRequestMap.nonEmpty)
