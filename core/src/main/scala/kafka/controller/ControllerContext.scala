@@ -376,6 +376,12 @@ class ControllerContext {
     replicas.partition(replica => isValidReplicaStateTransition(replica, targetState))
   }
 
+  /**
+   * 检测分区状态转换是否合法
+   * @param partitions
+   * @param targetState
+   * @return
+   */
   def checkValidPartitionStateChange(partitions: Seq[TopicPartition], targetState: PartitionState): (Seq[TopicPartition], Seq[TopicPartition]) = {
     partitions.partition(p => isValidPartitionStateTransition(p, targetState))
   }
@@ -392,7 +398,13 @@ class ControllerContext {
     replicaStates.getOrElseUpdate(replica, state)
   }
 
+  /**
+   * 将分区状态转换为目标状态并更新 offlinePartitionCount 元数据
+   * @param partition 目标分区
+   * @param targetState 目标状态
+   */
   def putPartitionState(partition: TopicPartition, targetState: PartitionState): Unit = {
+    // Map#put() 状态更新
     val currentState = partitionStates.put(partition, targetState).getOrElse(NonExistentPartition)
     updatePartitionStateMetrics(partition, currentState, targetState)
   }
