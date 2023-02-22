@@ -21,7 +21,8 @@ import kafka.utils.nonthreadsafe
 import java.util.concurrent.DelayQueue
 import java.util.concurrent.atomic.AtomicInteger
 
-/*
+/**
+ * 
  * Hierarchical Timing Wheels
  *
  * A simple timing wheel is a circular list of buckets of timer tasks. Let u be the time unit.
@@ -95,24 +96,54 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * This class is not thread-safe. There should not be any add calls while advanceClock is executing.
  * It is caller's responsibility to enforce it. Simultaneous add calls are thread-safe.
+ * 
+ * 
+ * Kafka 延时任务的分层时间轮实现，
+ * 一个时间轮下有多个作为 Bucket 的双向循环链表 TimerTaskList，
+ * 每个 TimerTaskList 存有多个延时任务节点 TimerTaskEntry，
+ * 每个 TimerTaskEntry 与唯一的延时任务 TimerTask 相关联
+ *
+ * @param tickMs tick 一次的时长，类似钟表向前前进一格的时间，第一层时间轮的 tickMs 被固定为了 1 ms
+ * @param wheelSize 时间轮上的 Bucket 数量，第一层时间轮的 Bucket 数量是 20
+ * @param startMs 时间轮被创建的起始时间戳
+ * @param taskCounter 当前层时间轮上的总定时任务数
+ * @param queue 将所有 Bucket 按照过期时间排序的延时队列，Kafka 需要依靠这个队列获取并移除那些已过期的 Bucket
  */
 @nonthreadsafe
 private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, taskCounter: AtomicInteger, queue: DelayQueue[TimerTaskList]) {
 
+  /**
+   * 当前层时间轮的总时长，时长为 tickMs * wheelSize
+   */
   private[this] val interval = tickMs * wheelSize
+  /**
+   * 时间轮下的所有 Bucket 对象
+   */
   private[this] val buckets = Array.tabulate[TimerTaskList](wheelSize) { _ => new TimerTaskList(taskCounter) }
 
+  /**
+   * 当前时间戳，其值是 小于当前时间的最大 tick 时长的整数倍
+   */
   private[this] var currentTime = startMs - (startMs % tickMs) // rounding down to multiple of tickMs
 
   // overflowWheel can potentially be updated and read by two concurrent threads through add().
   // Therefore, it needs to be volatile due to the issue of Double-Checked Locking pattern with JVM
+  /**
+   * 时间轮对象，Kafka 是按需创建时间轮的，只有当定时任务在之前的层数放不下时，才会创建下一层时间轮
+   */
   @volatile private[this] var overflowWheel: TimingWheel = null
 
+  /**
+   * 在本层时间轮的基础上，创建上一层时间轮
+   */
   private[this] def addOverflowWheel(): Unit = {
     synchronized {
+      // 只有上一层时间轮未创建时才会继续创建
       if (overflowWheel == null) {
         overflowWheel = new TimingWheel(
+          // 新一层的 tick 时长 = 下层时间轮的总时长(结合钟表的例子很容易理解)
           tickMs = interval,
+          // 每一层的 Bucket 数量都是相同的
           wheelSize = wheelSize,
           startMs = currentTime,
           taskCounter = taskCounter,
@@ -122,47 +153,67 @@ private[timer] class TimingWheel(tickMs: Long, wheelSize: Int, startMs: Long, ta
     }
   }
 
+  /**
+   * 将定时任务添加到时间轮中
+   * @param timerTaskEntry 待添加的定时任务
+   * @return
+   */
   def add(timerTaskEntry: TimerTaskEntry): Boolean = {
+    // 获取定时任务的过期时间
     val expiration = timerTaskEntry.expirationMs
-    // 如果返回的是false，意味着触发定时任务的过期
-    // 1.如果任务已经被取消or过期，返回false
+    // 如果定时任务已经被取消了，直接返回
     if (timerTaskEntry.cancelled) {
       // Cancelled
       false
+    // 如果定时任务已经过期了，直接返回  
     } else if (expiration < currentTime + tickMs) {
       // Already expired
       false
+    // 如果定时任务的超时时间在本层时间轮的覆盖时间范围内，继续执行后续操作 
     } else if (expiration < currentTime + interval) {
       // Put in its own bucket
       // 采用多级时间轮结构，如果第一级时间轮放不下的话，则尝试将其放到下一级时间轮中（粒度更粗）
+      // 计算定时任务要被放到哪个 Bucket 中
       val virtualId = expiration / tickMs
       val bucket = buckets((virtualId % wheelSize.toLong).toInt)
+      // 将定时任务添加到指定 Bucket
       bucket.add(timerTaskEntry)
 
       // Set the bucket expiration time
+      // 设置 Bucket 的过期时间
       if (bucket.setExpiration(virtualId * tickMs)) {
         // The bucket needs to be enqueued because it was an expired bucket
         // We only need to enqueue the bucket when its expiration time has changed, i.e. the wheel has advanced
         // and the previous buckets gets reused; further calls to set the expiration within the same wheel cycle
         // will pass in the same value and hence return false, thus the bucket with the same expiration will not
         // be enqueued multiple times.
+        // 如果过期时间发生变化，说明 Bucket 是新建或是被重用了，需要将其添加到 DelayQueue 中
         queue.offer(bucket)
       }
       true
-    // 2.根据过期时间将任务放到时间轮的指定位置
+    // 本层时间轮无法容纳定时任务，交给上层时间轮处理
     } else {
       // Out of the interval. Put it into the parent timer
+      // 上层时间轮不存在，需要创建
       if (overflowWheel == null) addOverflowWheel()
+      // 重复执行 add 方法，尝试将定时任务添加到上一层时间轮中，如果还放不下则需要继续创建更上层的时间轮，
+      // 直至添加成功
       overflowWheel.add(timerTaskEntry)
     }
   }
 
   // Try to advance the clock
+  /**
+   * 向前推进时钟，推进时钟的动作是由 Kafka 后台专属的 Reaper 线程发起的。
+   * @param timeMs 将时钟推进到 timeMs
+   */
   def advanceClock(timeMs: Long): Unit = {
+    // 向前推进的 timeMs 必须超过一个 Bucket 的时间范围，不然将没有意义
     if (timeMs >= currentTime + tickMs) {
       currentTime = timeMs - (timeMs % tickMs)
 
       // Try to advance the clock of the overflow wheel if present
+      // 为上一层时间轮做时钟推进
       if (overflowWheel != null) overflowWheel.advanceClock(currentTime)
     }
   }
