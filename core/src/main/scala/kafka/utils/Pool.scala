@@ -24,6 +24,12 @@ import org.apache.kafka.common.KafkaException
 import collection.Set
 import scala.jdk.CollectionConverters._
 
+/**
+ * Kafka 定义的池对象，本质上就是一个 ConcurrentHashMap
+ * @param valueFactory
+ * @tparam K
+ * @tparam V
+ */
 class Pool[K,V](valueFactory: Option[K => V] = None) extends Iterable[(K, V)] {
 
   private val pool: ConcurrentMap[K, V] = new ConcurrentHashMap[K, V]
