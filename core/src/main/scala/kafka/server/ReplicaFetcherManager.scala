@@ -21,6 +21,15 @@ import kafka.cluster.BrokerEndPoint
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.utils.Time
 
+/**
+ * 对所有 Fetcher 线程进行管理，包括线程的创建、启动、添加、停止和移除
+ * @param brokerConfig
+ * @param replicaManager
+ * @param metrics
+ * @param time
+ * @param threadNamePrefix
+ * @param quotaManager
+ */
 class ReplicaFetcherManager(brokerConfig: KafkaConfig,
                             protected val replicaManager: ReplicaManager,
                             metrics: Metrics,
@@ -32,6 +41,12 @@ class ReplicaFetcherManager(brokerConfig: KafkaConfig,
         clientId = "Replica",
         numFetchers = brokerConfig.numReplicaFetchers) {
 
+  /**
+   * 创建 ReplicaFetcherThread 实例，供 Follower 副本使用
+   * @param fetcherId
+   * @param sourceBroker
+   * @return
+   */
   override def createFetcherThread(fetcherId: Int, sourceBroker: BrokerEndPoint): ReplicaFetcherThread = {
     val prefix = threadNamePrefix.map(tp => s"$tp:").getOrElse("")
     val threadName = s"${prefix}ReplicaFetcherThread-$fetcherId-${sourceBroker.id}"
