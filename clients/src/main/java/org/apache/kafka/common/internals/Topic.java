@@ -29,6 +29,9 @@ public class Topic {
     public static final String TRANSACTION_STATE_TOPIC_NAME = "__transaction_state";
     public static final String LEGAL_CHARS = "[a-zA-Z0-9._-]";
 
+    /**
+     * Kafka 内部主题，目前只有 __consumer_offsets 和 __transaction_state 两个
+     */
     private static final Set<String> INTERNAL_TOPICS = Collections.unmodifiableSet(
             Utils.mkSet(GROUP_METADATA_TOPIC_NAME, TRANSACTION_STATE_TOPIC_NAME));
 
@@ -53,6 +56,11 @@ public class Topic {
                     "ASCII alphanumerics, '.', '_' and '-'");
     }
 
+    /**
+     * 判断是否是 Kafka 内部 Topic
+     * @param topic
+     * @return
+     */
     public static boolean isInternal(String topic) {
         return INTERNAL_TOPICS.contains(topic);
     }

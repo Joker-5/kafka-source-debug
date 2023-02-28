@@ -36,6 +36,8 @@ import scala.collection.mutable.ArrayBuffer
 
 /**
  * The source of an append to the log. This is used when determining required validations.
+ * 
+ * 表示写入方的来源
  */
 private[kafka] sealed trait AppendOrigin
 private[kafka] object AppendOrigin {
@@ -43,6 +45,8 @@ private[kafka] object AppendOrigin {
   /**
    * The log append came through replication from the leader. This typically implies minimal validation.
    * Particularly, we do not decompress record batches in order to validate records individually.
+   * 
+   * 写入请求是由 Follower 副本发出的，将从 Leader 副本获取到的消息写入到底层的消息日志中
    */
   case object Replication extends AppendOrigin
 
@@ -50,16 +54,22 @@ private[kafka] object AppendOrigin {
    * The log append came from either the group coordinator or the transaction coordinator. We validate
    * producer epochs for normal log entries (specifically offset commits from the group coordinator) and
    * we validate coordinate end transaction markers from the transaction coordinator.
+   * 
+   * 写入请求由 Coordinator 发起
    */
   case object Coordinator extends AppendOrigin
 
   /**
    * The log append came from the client, which implies full validation.
+   * 
+   * 写入请求由客户端发起
    */
   case object Client extends AppendOrigin
 
   /**
    * The log append come from the raft leader, which implies the offsets has been assigned
+   * 
+   * 写入请求由 Raft Leader 节点发起
    */
   case object RaftLeader extends AppendOrigin
 }
