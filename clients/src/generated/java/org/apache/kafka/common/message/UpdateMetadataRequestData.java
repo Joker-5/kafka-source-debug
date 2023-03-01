@@ -1543,7 +1543,11 @@ public class UpdateMetadataRequestData implements ApiMessage {
             return this;
         }
     }
-    
+
+
+    /**
+     * 包含主题分区中的各种数据，由 Kafka generator 工程自动生成
+     */
     public static class UpdateMetadataPartitionState implements Message {
         String topicName;
         int partitionIndex;

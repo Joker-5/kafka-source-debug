@@ -23,6 +23,9 @@ import org.apache.kafka.common.{Cluster, Node, TopicPartition}
 import org.apache.kafka.common.message.{MetadataResponseData, UpdateMetadataRequestData}
 import org.apache.kafka.common.network.ListenerName
 
+/**
+ * Kafka 元数据缓存
+ */
 trait MetadataCache {
 
   /**
@@ -43,6 +46,10 @@ trait MetadataCache {
     errorUnavailableEndpoints: Boolean = false,
     errorUnavailableListeners: Boolean = false): collection.Seq[MetadataResponseData.MetadataResponseTopic]
 
+  /**
+   * 获取当前集群元数据缓存中的所有主题
+   * @return
+   */
   def getAllTopics(): collection.Set[String]
 
   def getTopicPartitions(topicName: String): collection.Set[TopicPartition]
@@ -55,6 +62,12 @@ trait MetadataCache {
 
   def getAliveBrokerNodes(listenerName: ListenerName): Iterable[Node]
 
+  /**
+   * 获取给定主题分区的详细数据信息。如果没有找到对应记录，返回None
+   * @param topic
+   * @param partitionId
+   * @return
+   */
   def getPartitionInfo(topic: String, partitionId: Int): Option[UpdateMetadataRequestData.UpdateMetadataPartitionState]
 
   /**
@@ -71,14 +84,30 @@ trait MetadataCache {
    */
   def getPartitionLeaderEndpoint(topic: String, partitionId: Int, listenerName: ListenerName): Option[Node]
 
+  /**
+   * 获取指定监听器类型下，该主题分区所有副本的 Broker 节点对象，并按照 Broker ID 进行分组
+   * @param tp
+   * @param listenerName
+   * @return
+   */
   def getPartitionReplicaEndpoints(tp: TopicPartition, listenerName: ListenerName): Map[Int, Node]
 
   def getControllerId: Option[Int]
 
   def getClusterMetadata(clusterId: String, listenerName: ListenerName): Cluster
 
+  /**
+   * 判断给定主题是否包含在元数据缓存中
+   * @param topic
+   * @return
+   */
   def contains(topic: String): Boolean
 
+  /**
+   * 判断给定主题分区是否包含在元数据缓存中
+   * @param tp
+   * @return
+   */
   def contains(tp: TopicPartition): Boolean
 }
 
