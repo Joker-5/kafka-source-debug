@@ -163,6 +163,11 @@ abstract class AbstractFetcherManager[T <: AbstractFetcherThread](val name: Stri
     info(s"Added fetcher to broker ${fetcherThread.sourceBroker.id} for partitions $initialOffsetAndEpochs")
   }
 
+  /**
+   * 为指定分区关闭消息拉取线程
+   * @param partitions
+   * @return
+   */
   def removeFetcherForPartitions(partitions: Set[TopicPartition]): Map[TopicPartition, PartitionFetchState] = {
     val fetchStates = mutable.Map.empty[TopicPartition, PartitionFetchState]
     lock synchronized {

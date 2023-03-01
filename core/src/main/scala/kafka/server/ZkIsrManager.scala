@@ -87,15 +87,23 @@ class ZkIsrManager(scheduler: Scheduler, time: Time, zkClient: KafkaZkClient) ex
    * 2. There is no ISR Change in the last five seconds, or it has been more than 60 seconds since the last ISR propagation.
    * This allows an occasional ISR change to be propagated within a few seconds, and avoids overwhelming controller and
    * other brokers when large amount of ISR change occurs.
+   * 
+   * 负责创建 ISR 通知事件
    */
   private[server] def maybePropagateIsrChanges(): Unit = {
     val now = time.milliseconds()
     isrChangeSet synchronized {
+      // ISR 变更传播的条件，需要同时满足：
+      // 1. 存在尚未被传播的 ISR 变更
+      // 2. 最近 5 秒没有任何 ISR 变更，或者自上次 ISR 变更已经有超过 1 分钟的时间
       if (isrChangeSet.nonEmpty &&
         (lastIsrChangeMs.get() + isrChangeNotificationConfig.lingerMs < now ||
           lastIsrPropagationMs.get() + isrChangeNotificationConfig.maxDelayMs < now)) {
+        // 创建 ZK 相应的 Znode 节点
         zkClient.propagateIsrChanges(isrChangeSet)
+        // 清空 isrChangeSet 集合
         isrChangeSet.clear()
+        // 更新最近 ISR 变更时间戳
         lastIsrPropagationMs.set(now)
       }
     }

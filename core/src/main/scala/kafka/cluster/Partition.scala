@@ -906,13 +906,20 @@ class Partition(val topicPartition: TopicPartition,
    */
   private def tryCompleteDelayedRequests(): Unit = delayedOperations.checkAndCompleteAll()
 
+  /**
+   *  查看 ISR 中的副本集合是否需要收缩
+   */
   def maybeShrinkIsr(): Unit = {
+    // 判断是否需要执行 ISR 收缩
     val needsIsrUpdate = !isrState.isInflight && inReadLock(leaderIsrUpdateLock) {
       needsShrinkIsr()
     }
     val leaderHWIncremented = needsIsrUpdate && inWriteLock(leaderIsrUpdateLock) {
+      // Leader 副本
       leaderLogIfLocal.exists { leaderLog =>
+        // 获取不同步的副本Id列表
         val outOfSyncReplicaIds = getOutOfSyncReplicas(replicaLagTimeMaxMs)
+        // 如果存在不同步的副本Id列表，则进行收缩
         if (outOfSyncReplicaIds.nonEmpty) {
           val outOfSyncReplicaLog = outOfSyncReplicaIds.map { replicaId =>
             val logEndOffsetMessage = getReplica(replicaId)
@@ -926,9 +933,11 @@ class Partition(val topicPartition: TopicPartition,
                s"endOffset: ${leaderLog.logEndOffset}). " +
                s"Out of sync replicas: $outOfSyncReplicaLog.")
 
+          // 更新 ZooKeeper 中分区的 ISR 数据以及 Broker 的元数据缓存中的数据
           shrinkIsr(outOfSyncReplicaIds)
 
           // we may need to increment high watermark since ISR could be down to 1
+          // 尝试更新 Leader 副本的高水位值
           maybeIncrementLeaderHW(leaderLog)
         } else {
           false
@@ -937,6 +946,7 @@ class Partition(val topicPartition: TopicPartition,
     }
 
     // some delayed operations may be unblocked after HW changed
+    // 如果 Leader 副本的高水位值抬升了，则尝试解锁延迟请求
     if (leaderHWIncremented)
       tryCompleteDelayedRequests()
   }
