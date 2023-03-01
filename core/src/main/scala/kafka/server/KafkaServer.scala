@@ -257,6 +257,7 @@ class KafkaServer(
         _brokerState = BrokerState.RECOVERY
         logManager.startup(zkClient.getAllTopicsInCluster())
 
+        // 实例化元数据缓存
         metadataCache = MetadataCache.zkMetadataCache(config.brokerId)
         // Enable delegation token cache for all SCRAM mechanisms to simplify dynamic update.
         // This keeps the cache up-to-date if new SCRAM mechanisms are enabled dynamically.
@@ -317,6 +318,7 @@ class KafkaServer(
         alterIsrManager.start()
 
         _replicaManager = createReplicaManager(isShuttingDown)
+        // 启动副本管理器
         replicaManager.startup()
 
         val brokerInfo = createBrokerInfo

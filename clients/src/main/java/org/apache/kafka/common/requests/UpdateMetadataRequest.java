@@ -41,6 +41,9 @@ import java.util.Map;
 
 import static java.util.Collections.singletonList;
 
+/**
+ * UpdateMetadataRequest 请求类
+ */
 public class UpdateMetadataRequest extends AbstractControlRequest {
 
     public static class Builder extends AbstractControlRequest.Builder<UpdateMetadataRequest> {
