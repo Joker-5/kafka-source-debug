@@ -199,6 +199,7 @@ public final class MessageUtil {
     public static ByteBuffer toVersionPrefixedByteBuffer(final short version, final Message message) {
         ObjectSerializationCache cache = new ObjectSerializationCache();
         int messageSize = message.size(cache, version);
+        // 构造一个 ByteBuffer 对象，容纳 message 数据
         ByteBufferAccessor bytes = new ByteBufferAccessor(ByteBuffer.allocate(messageSize + 2));
         bytes.writeShort(version);
         message.write(bytes, cache, version);
