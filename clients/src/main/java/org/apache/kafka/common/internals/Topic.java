@@ -30,7 +30,9 @@ public class Topic {
     public static final String LEGAL_CHARS = "[a-zA-Z0-9._-]";
 
     /**
-     * Kafka 内部主题，目前只有 __consumer_offsets 和 __transaction_state 两个
+     * Kafka 内部主题，目前只有 __consumer_offsets 和 __transaction_state 两个，
+     * __consumer_offsets 是位移主题，
+     * __transaction_state 是事务主题，负责保存 Kafka 事务的状态信息
      */
     private static final Set<String> INTERNAL_TOPICS = Collections.unmodifiableSet(
             Utils.mkSet(GROUP_METADATA_TOPIC_NAME, TRANSACTION_STATE_TOPIC_NAME));
