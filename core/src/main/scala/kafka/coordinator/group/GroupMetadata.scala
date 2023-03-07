@@ -519,11 +519,19 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
     timeout.max(member.rebalanceTimeoutMs)
   }
 
+  /**
+   * 为组成员生成 memberId
+   * @param clientId 消费者端参数 client.id 值
+   * @param groupInstanceId 静态成员 Id
+   * @return
+   */
   def generateMemberId(clientId: String,
                        groupInstanceId: Option[String]): String = {
     groupInstanceId match {
+      // 非静态成员 memberId 生成规则：client.id-UUID
       case None =>
         clientId + GroupMetadata.MemberIdDelimiter + UUID.randomUUID().toString
+      // 静态成员 memberId 生成规则：instanceId-UUID
       case Some(instanceId) =>
         instanceId + GroupMetadata.MemberIdDelimiter + UUID.randomUUID().toString
     }
