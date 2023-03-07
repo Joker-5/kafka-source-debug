@@ -190,7 +190,8 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.PRODUCE => handleProduceRequest(request, requestLocal)
         case ApiKeys.FETCH => handleFetchRequest(request)
         case ApiKeys.LIST_OFFSETS => handleListOffsetRequest(request)
-        case ApiKeys.METADATA => handleTopicMetadataRequest(request)  // 处理更新元数据的请求
+        // 处理更新元数据的请求
+        case ApiKeys.METADATA => handleTopicMetadataRequest(request)  
         case ApiKeys.LEADER_AND_ISR => handleLeaderAndIsrRequest(request)
         case ApiKeys.STOP_REPLICA => handleStopReplicaRequest(request)
         case ApiKeys.UPDATE_METADATA => handleUpdateMetadataRequest(request, requestLocal)
@@ -198,9 +199,11 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.OFFSET_COMMIT => handleOffsetCommitRequest(request, requestLocal)
         case ApiKeys.OFFSET_FETCH => handleOffsetFetchRequest(request)
         case ApiKeys.FIND_COORDINATOR => handleFindCoordinatorRequest(request)
+        // Rebalance 加入组请求
         case ApiKeys.JOIN_GROUP => handleJoinGroupRequest(request, requestLocal)
         case ApiKeys.HEARTBEAT => handleHeartbeatRequest(request)
         case ApiKeys.LEAVE_GROUP => handleLeaveGroupRequest(request)
+        // Rebalance 组同步请求
         case ApiKeys.SYNC_GROUP => handleSyncGroupRequest(request, requestLocal)
         case ApiKeys.DESCRIBE_GROUPS => handleDescribeGroupRequest(request)
         case ApiKeys.LIST_GROUPS => handleListGroupsRequest(request)
@@ -1600,6 +1603,11 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
+  /**
+   * 处理加入消费者组请求
+   * @param request
+   * @param requestLocal
+   */
   def handleJoinGroupRequest(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
     val joinGroupRequest = request.body[JoinGroupRequest]
 
@@ -1648,6 +1656,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       val protocols = joinGroupRequest.data.protocols.valuesList.asScala.map(protocol =>
         (protocol.name, protocol.metadata)).toList
 
+      // 处理加入消费者组请求的具体逻辑
       groupCoordinator.handleJoinGroup(
         joinGroupRequest.data.groupId,
         joinGroupRequest.data.memberId,
