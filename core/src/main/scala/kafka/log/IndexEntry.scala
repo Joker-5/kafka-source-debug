@@ -39,6 +39,9 @@ case class OffsetPosition(offset: Long, position: Int) extends IndexEntry {
 /**
  * The mapping between a timestamp to a message offset. The entry means that any message whose timestamp is greater
  * than that timestamp must be at or after that offset.
+ * 
+ * 日志时间戳与对应的位移偏移量
+ * 
  * @param timestamp The max timestamp before the given offset.
  * @param offset The message offset.
  */

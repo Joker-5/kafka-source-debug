@@ -145,6 +145,9 @@ public class DefaultRecordBatch extends AbstractRecordBatch implements MutableRe
     }
 
     @Override
+    /**
+     * 确保消息的合法性
+     */
     public void ensureValid() {
         if (sizeInBytes() < RECORD_BATCH_OVERHEAD)
             throw new CorruptRecordException("Record batch is corrupt (the size " + sizeInBytes() +
