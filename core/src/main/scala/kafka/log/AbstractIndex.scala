@@ -306,6 +306,7 @@ abstract class AbstractIndex(@volatile private var _file: File, val baseOffset: 
    * @return true if this offset is valid to be appended to this index; false otherwise
    */
   def canAppendOffset(offset: Long): Boolean = {
+    // 将指定位移转换为相对位移
     toRelative(offset).isDefined
   }
 
@@ -419,8 +420,15 @@ abstract class AbstractIndex(@volatile private var _file: File, val baseOffset: 
    */
   private def roundDownToExactMultiple(number: Int, factor: Int) = factor * (number / factor)
 
+  /**
+   * 将指定位移转换为相对位移
+   * @param offset
+   * @return
+   */
   private def toRelative(offset: Long): Option[Int] = {
+    // 相对位移 = 指定位移 - 基准位移
     val relativeOffset = offset - baseOffset
+    // 转换后的相对位移必须在 [0, Int.MAXValue] 范围内
     if (relativeOffset < 0 || relativeOffset > Int.MaxValue)
       None
     else
