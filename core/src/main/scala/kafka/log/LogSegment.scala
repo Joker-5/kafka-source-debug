@@ -48,7 +48,7 @@ import scala.math._
  * @param txnIndex The transaction index. 已终止事务索引文件
  * @param baseOffset A lower bound on the offsets in this segment. 起始位移，固定不可被修改
  * @param indexIntervalBytes The approximate number of bytes between entries in the index. 对应于 Broker 端参数 log.index.interval.bytes，默认为 4KB，用于控制日志段对象新增索引项的频率
- * @param rollJitterMs The maximum random jitter subtracted from the scheduled segment roll time. 新增日志端时的微扰值
+ * @param rollJitterMs The maximum random jitter subtracted from the scheduled segment roll time. 新增日志段时的微扰值
  * @param time The time instance
  */
 @nonthreadsafe
@@ -192,8 +192,11 @@ class LogSegment private[log] (val log: FileRecords,
       // 更新索引项和写入的字节数，如果写入的字节数已经超过指定大小(log.index.interval.bytes 参数值，默认为 4KB)，
       // 则需要新增索引项并清空已写入字节数
       if (bytesSinceLastIndexEntry > indexIntervalBytes) {
+        // 新增位移索引项
         offsetIndex.append(largestOffset, physicalPosition)
+        // 新增时间戳索引项
         timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar)
+        // 清空当前已写入字节数
         bytesSinceLastIndexEntry = 0
       }
       bytesSinceLastIndexEntry += records.sizeInBytes
@@ -317,7 +320,7 @@ class LogSegment private[log] (val log: FileRecords,
    * @param startOffset A lower bound on the first offset to include in the message set we read. 要读取的第一条消息的位移
    * @param maxSize The maximum number of bytes to include in the message set we read. 读取的最大字节数
    * @param maxPosition The maximum position in the log segment that should be exposed for read. 读取的最大文件位置
-   * @param minOneMessage If this is true, the first message will be returned even if it exceeds `maxSize` (if one exists). 是否允许至少返回一条消息，确保不会发生消费饿死的情况，默认是 false
+   * @param minOneMessage If this is true, the first message will be returned even if it exceeds `maxSize` (if one exists). 是否允许至少返回一条消息，即使出现消息体字节数超过了 maxSize 的情况，确保不会发生消费饿死的情况，默认是 false
    *
    * @return The fetched data and the offset metadata of the first message whose offset is >= startOffset,
    *         or null if the startOffset is larger than the largest offset in this log
@@ -379,7 +382,7 @@ class LogSegment private[log] (val log: FileRecords,
    */
   @nonthreadsafe
   def recover(producerStateManager: ProducerStateManager, leaderEpochCache: Option[LeaderEpochFileCache] = None): Int = {
-    // 清空所有索引文件
+    // 清空所有索引文件，包括位移索引、时间戳索引、事务索引
     offsetIndex.reset()
     timeIndex.reset()
     txnIndex.reset()
@@ -431,7 +434,7 @@ class LogSegment private[log] (val log: FileRecords,
 
     // 截断日志
     log.truncateTo(validBytes)
-    // 调整两个索引文件的大小
+    // 调整位移索引和时间戳索引这两个索引文件的大小
     offsetIndex.trimToValidSize()
     // A normally closed segment always appends the biggest timestamp ever seen into log segment, we do this as well.
     timeIndex.maybeAppend(maxTimestampSoFar, offsetOfMaxTimestampSoFar, skipFullCheck = true)
