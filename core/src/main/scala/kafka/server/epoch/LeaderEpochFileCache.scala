@@ -37,6 +37,8 @@ import scala.jdk.CollectionConverters._
  * @param topicPartition the associated topic partition
  * @param checkpoint the checkpoint file
  */
+// TODO 深入实现原理
+// Leader Epoch 缓存类，负责缓存分区 Leader 的 Epoch 值与对应位移值的映射关系
 class LeaderEpochFileCache(topicPartition: TopicPartition,
                            checkpoint: LeaderEpochCheckpoint) extends Logging {
   this.logIdent = s"[LeaderEpochCache $topicPartition] "

@@ -218,9 +218,12 @@ case object SnapshotGenerated extends LogStartOffsetIncrementReason {
  * New log segments are created according to a configurable policy that controls the size in bytes or time interval
  * for a given segment.
  *
- * @param _dir The directory in which log segments are created.
+ * @param _dir The directory in which log segments are created. 
+ *             日志所在的文件夹路径，即主题分区的所在路径
  * @param config The log configuration settings
  * @param segments The non-empty log segments recovered from disk
+ *                 Log 类中最重要的属性，保存了分区(Log)下所有 LogSegment 的信息，
+ *                 具体是采用一个 ConcurrentSkipListMap[Long, LogSegment] 的 Map 结构进行保存
  * @param logStartOffset The earliest offset allowed to be exposed to kafka client.
  *                       The logStartOffset can be updated by :
  *                       - user's DeleteRecordsRequest
@@ -233,8 +236,10 @@ case object SnapshotGenerated extends LogStartOffsetIncrementReason {
  *                       - Earliest offset of the log in response to ListOffsetRequest. To avoid OffsetOutOfRange exception after user seeks to earliest offset,
  *                         we make sure that logStartOffset <= log's highWatermark
  *                       Other activities such as log cleaning are not affected by logStartOffset.
+ *                       日志当前对外可见的最早一条消息的位移值
  * @param recoveryPoint The offset at which to begin the next recovery i.e. the first offset which has not been flushed to disk
  * @param nextOffsetMetadata The offset where the next message could be appended
+ *                           封装下一条待写入消息的 offset 等信息，相当于 LEO
  * @param scheduler The thread pool scheduler used for background actions
  * @param brokerTopicStats Container for Broker Topic Yammer Metrics
  * @param time The time instance used for checking the clock
@@ -242,6 +247,7 @@ case object SnapshotGenerated extends LogStartOffsetIncrementReason {
  * @param topicPartition The topic partition associated with this Log instance
  * @param leaderEpochCache The LeaderEpochFileCache instance (if any) containing state associated
  *                         with the provided logStartOffset and nextOffsetMetadata
+ *                         缓存类型数据，其中保存了分区 Leader 的 Epoch 值与对应位移值的映射关系
  * @param producerStateManager The ProducerStateManager instance containing state associated with the provided segments
  * @param _topicId optional Uuid to specify the topic ID for the topic if it exists. Should only be specified when
  *                first creating the log through Partition.makeLeader or Partition.makeFollower. When reloading a log,
@@ -307,12 +313,16 @@ class Log(@volatile private var _dir: File,
    * equals the log end offset (which may never happen for a partition under consistent load). This is needed to
    * prevent the log start offset (which is exposed in fetch responses) from getting ahead of the high watermark.
    */
+  // 分区日志高水位值
   @volatile private var highWatermarkMetadata: LogOffsetMetadata = LogOffsetMetadata(logStartOffset)
 
   @volatile var partitionMetadataFile : PartitionMetadataFile = null
 
+  // Log 类初始化逻辑
   locally {
+    // 初始化分区元数据
     initializePartitionMetadata()
+    // 更新 Log Start Offset
     updateLogStartOffset(logStartOffset)
     maybeIncrementFirstUnstableOffset()
     initializeTopicId()
@@ -2006,26 +2016,34 @@ class Log(@volatile private var _dir: File,
  */
 object Log extends Logging {
   /** a log file */
+  // 日志文件
   val LogFileSuffix = ".log"
 
   /** an index file */
+  // 位移索引文件  
   val IndexFileSuffix = ".index"
 
   /** a time index file */
+  // 时间索引文件  
   val TimeIndexFileSuffix = ".timeindex"
 
+  // Kafka 为幂等型或事务型 Producer 所做的快照文件
   val ProducerSnapshotFileSuffix = ".snapshot"
 
   /** an (aborted) txn index */
+  // 已终止事务索引文件  
   val TxnIndexFileSuffix = ".txnindex"
 
   /** a file that is scheduled to be deleted */
+  // 删除日志段时创建的文件
   val DeletedFileSuffix = ".deleted"
 
   /** A temporary file that is being used for log cleaning */
+  // 在 Compaction 操作时产生的临时文件，用于日志清理
   val CleanedFileSuffix = ".cleaned"
 
   /** A temporary file used when swapping files into the log */
+  // 在 Compaction 操作时产生的临时文件
   val SwapFileSuffix = ".swap"
 
   /** Clean shutdown file that indicates the broker was cleanly shutdown in 0.8 and higher.
@@ -2037,9 +2055,11 @@ object Log extends Logging {
   val CleanShutdownFile = ".kafka_cleanshutdown"
 
   /** a directory that is scheduled to be deleted */
+  // 文件夹待删除标记。当删除一个 Topic 时，该 Topic 的分区文件夹会被加上该后缀  
   val DeleteDirSuffix = "-delete"
 
   /** a directory that is used for future partition */
+  // 用于变更主题分区文件夹地址，属于高阶用法  
   val FutureDirSuffix = "-future"
 
   private[log] val DeleteDirPattern = Pattern.compile(s"^(\\S+)-(\\S+)\\.(\\S+)$DeleteDirSuffix")
@@ -2047,6 +2067,7 @@ object Log extends Logging {
 
   val UnknownOffset = -1L
 
+  // Log 伴生类初始化流程，定义 apply 方法用于无需 new 关键字即可创建对象
   def apply(dir: File,
             config: LogConfig,
             logStartOffset: Long,
@@ -2061,16 +2082,19 @@ object Log extends Logging {
             topicId: Option[Uuid],
             keepPartitionMetadataFile: Boolean): Log = {
     // create the log directory if it doesn't exist
+    // 创建分区日志路径
     Files.createDirectories(dir.toPath)
     val topicPartition = Log.parseTopicPartitionName(dir)
     val segments = new LogSegments(topicPartition)
+    // 初始化 LeaderEpochCache
     val leaderEpochCache = Log.maybeCreateLeaderEpochCache(
       dir,
       topicPartition,
       logDirFailureChannel,
       config.recordVersion,
       s"[Log partition=$topicPartition, dir=${dir.getParent}] ")
-    val producerStateManager = new ProducerStateManager(topicPartition, dir, maxProducerIdExpirationMs, time)
+    val producerStateManager = new ProducerStateManager(topicPartition, dir, maxProducerIdExpirationMs, time)、
+    // 加载所有日志段对象
     val offsets = LogLoader.load(LoadLogParams(
       dir,
       topicPartition,
@@ -2093,13 +2117,17 @@ object Log extends Logging {
   /**
    * Make log segment file name from offset bytes. All this does is pad out the offset number with zeros
    * so that ls sorts the files numerically.
+   * 
+   * 通过给定的位移值计算出对应的 LogSegment 文件名
    *
    * @param offset The offset to use in the file name
    * @return The filename
    */
   def filenamePrefixFromOffset(offset: Long): String = {
     val nf = NumberFormat.getInstance()
+    // 日志文件名长度固定为 20 位
     nf.setMinimumIntegerDigits(20)
+    // 高位补零
     nf.setMaximumFractionDigits(0)
     nf.setGroupingUsed(false)
     nf.format(offset)
@@ -2285,6 +2313,8 @@ object Log extends Logging {
    * If the recordVersion is >= RecordVersion.V2, then create and return a LeaderEpochFileCache.
    * Otherwise, the message format is considered incompatible and the existing LeaderEpoch file
    * is deleted.
+   * 
+   * 初始化 LeaderEpochCache
    *
    * @param dir The directory in which the log will reside
    * @param topicPartition The topic partition
@@ -2298,6 +2328,7 @@ object Log extends Logging {
                                   logDirFailureChannel: LogDirFailureChannel,
                                   recordVersion: RecordVersion,
                                   logPrefix: String): Option[LeaderEpochFileCache] = {
+    // 创建 Leader Epoch 检查点文件
     val leaderEpochFile = LeaderEpochCheckpointFile.newFile(dir)
 
     def newLeaderEpochFileCache(): LeaderEpochFileCache = {
@@ -2306,9 +2337,10 @@ object Log extends Logging {
     }
 
     if (recordVersion.precedes(RecordVersion.V2)) {
-      val currentCache = if (leaderEpochFile.exists())
+      val currentCache = if (leaderEpochFile.exists()) {
+        // 生成 LeaderEpochCache 对象
         Some(newLeaderEpochFileCache())
-      else
+      } else
         None
 
       if (currentCache.exists(_.nonEmpty))

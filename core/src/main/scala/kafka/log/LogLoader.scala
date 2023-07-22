@@ -81,6 +81,8 @@ object LogLoader extends Logging {
    *
    * In the context of the calling thread, this function does not need to convert IOException to
    * KafkaStorageException because it is only called before all logs are loaded.
+   * 
+   * 从磁盘日志文件中加载日志段，返回已加载日志相关信息
    *
    * @param params The parameters for the log being loaded from disk
    *
@@ -93,6 +95,7 @@ object LogLoader extends Logging {
 
     // First pass: through the files in the log directory and remove any temporary files
     // and find any interrupted swap operations
+    // 移除上次 Failure 遗留下来的各种临时文件，包括 .cleaned、.swap、.deleted 文件等
     val swapFiles = removeTempFilesAndCollectSwapFiles(params)
 
     // The remaining valid swap files must come from compaction or segment split operation. We can
