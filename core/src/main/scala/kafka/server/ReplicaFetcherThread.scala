@@ -178,10 +178,11 @@ class ReplicaFetcherThread(name: String,
 
   /**
    * process fetched data
-   * AbstractFetcherThread 线程从 Leader 副本拉取回消息后，需要调用 processPartitionData 方法进行后续动作
-   * @param topicPartition
-   * @param fetchOffset
-   * @param partitionData
+   * Follower 副本的 AbstractFetcherThread 线程从 Leader 副本拉取回消息后，需要调用 processPartitionData 方法进行后续动作【拉模型】
+   *
+   * @param topicPartition 读取哪个主题分区的数据
+   * @param fetchOffset 读取到的最新位移值
+   * @param partitionData 读取到的数据
    * @return
    */
   override def processPartitionData(topicPartition: TopicPartition,

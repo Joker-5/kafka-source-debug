@@ -693,18 +693,29 @@ public class FetchResponseData implements ApiMessage {
             return this;
         }
     }
-    
+
+    /**
+     * 嵌套类，定义从分区中拉取到的数据
+     */
     public static class PartitionData implements Message {
         int partitionIndex;
+        // 错误码
         short errorCode;
+        // 高水位值
         long highWatermark;
+        // 最新 LSO 值
         long lastStableOffset;
+        // 最新 Log Start Offset 值
         long logStartOffset;
         EpochEndOffset divergingEpoch;
         LeaderIdAndEpoch currentLeader;
         SnapshotId snapshotId;
+        // 分区对应的已终止事务列表
         List<AbortedTransaction> abortedTransactions;
+        // 用于指定可对外提供读服务的 Follower 副本
+        // KAFKA 2.4 之后支持部分 Follower 副本可以对外提供读服务
         int preferredReadReplica;
+        // 消息集合，核心字段
         BaseRecords records;
         private List<RawTaggedField> _unknownTaggedFields;
         
