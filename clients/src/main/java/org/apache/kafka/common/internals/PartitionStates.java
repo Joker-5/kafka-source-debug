@@ -61,12 +61,14 @@ public class PartitionStates<S> {
     }
 
     /**
-     * 保证读取主题分区时的公平性
-     * 读取分区：A、B、C、D，读取A之后，顺序调整为：B、C、D、A
+     * 保证读取主题分区时的公平性，将指定分区移动到有序集合的末尾处
+     * e.g. 读取分区：A、B、C、D，读取A之后，顺序调整为：B、C、D、A
+     *
      * @param topicPartition 主题分区
-     * @param state 分区状态
+     * @param state          分区状态
      */
     public void updateAndMoveToEnd(TopicPartition topicPartition, S state) {
+        // append after remove
         map.remove(topicPartition);
         map.put(topicPartition, state);
         updateSize();
