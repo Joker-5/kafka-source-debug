@@ -45,15 +45,16 @@ import scala.compat.java8.OptionConverters._
 
 /**
  * ReplicaFetcherThread 类是 Follower 副本端创建的线程，用于从 Leader 副本拉取消息数据。
- * @param name 线程名
- * @param fetcherId Follower 拉取线程的 ID，也就是线程的编号，num.replica.fetchers 参数决定 Kafka 到底创建多少个 Follower 拉取线程
- * @param sourceBroker 源 Broker 节点信息
- * @param brokerConfig Broker 端所有参数信息
- * @param failedPartitions
- * @param replicaMgr 副本管理器
+ *
+ * @param name                       线程名
+ * @param fetcherId                  Follower 拉取线程的 ID，也就是线程的编号，num.replica.fetchers 参数决定 Kafka 到底创建多少个 Follower 拉取线程
+ * @param sourceBroker               源 Broker 节点信息，定义从哪个 Broker 上读取数据
+ * @param brokerConfig               Broker 端所有参数信息
+ * @param failedPartitions           线程处理过程中报错的分区集合，用于计算特定的统计指标
+ * @param replicaMgr                 副本管理器
  * @param metrics
  * @param time
- * @param quota 限流相关功能，属于高阶用法
+ * @param quota                      限流相关功能，属于高阶用法
  * @param leaderEndpointBlockingSend 用于实现同步发送请求，同步发送是指该线程使用它给指定 Broker 发送请求，然后线程处于阻塞状态，直到接收到 Broker 返回的 Response。
  */
 class ReplicaFetcherThread(name: String,
@@ -71,7 +72,7 @@ class ReplicaFetcherThread(name: String,
                                 sourceBroker = sourceBroker,
                                 failedPartitions,
                                 fetchBackOffMs = brokerConfig.replicaFetchBackoffMs,
-                                isInterruptible = false,
+                                isInterruptible = false, // ReplicaFetcherThread 线程是不可被中断的
                                 replicaMgr.brokerTopicStats) {
 
   // 副本 Id 就是副本所在 Broker 的 Id
