@@ -88,15 +88,24 @@ abstract class AbstractFetcherThread(name: String,
 
   /* callbacks to be defined in subclass */
 
-  // process fetched data
+
+  /**
+   * process fetched data
+   * 处理读取回来的消息集合
+   *
+   * @param topicPartition
+   * @param fetchOffset
+   * @param partitionData
+   * @return Option[LogAppendInfo] 写入已读取消息数据前的元数据，对于 Follower 副本读消息写入日志而言，一定不为空
+   */
   protected def processPartitionData(topicPartition: TopicPartition,
                                      fetchOffset: Long,
                                      partitionData: FetchData): Option[LogAppendInfo]
 
   /**
    * 负责执行日志截断逻辑
-   * @param topicPartition
-   * @param truncationState
+   * @param topicPartition 主题分区
+   * @param truncationState offset + 截断状态
    */
   protected def truncate(topicPartition: TopicPartition, truncationState: OffsetTruncationState): Unit
 
@@ -903,7 +912,15 @@ case class ClientIdTopicPartition(clientId: String, topicPartition: TopicPartiti
  * 表示副本读取状态，目前共有截断中和获取中两种状态
  */
 sealed trait ReplicaState
+
+/**
+ * 副本截断中
+ */
 case object Truncating extends ReplicaState
+
+/**
+ * 副本获取中
+ */
 case object Fetching extends ReplicaState
 
 object PartitionFetchState {
@@ -922,6 +939,13 @@ object PartitionFetchState {
  * (3) ReadyForFetch, the is the active state where the thread is actively fetching data.
  * 
  * 分区读取状态类，保存分区的已读取位移值和对应的副本状态
+ *
+ * @param fetchOffset
+ * @param lag
+ * @param currentLeaderEpoch
+ * @param delay
+ * @param state 副本状态
+ * @param lastFetchedEpoch
  */
 case class PartitionFetchState(fetchOffset: Long,
                                lag: Option[Long],
@@ -929,31 +953,36 @@ case class PartitionFetchState(fetchOffset: Long,
                                delay: Option[DelayedItem],
                                state: ReplicaState,
                                lastFetchedEpoch: Option[Int]) {
+  // 分区的状态比副本的状态要更严格一些，二者的状态并不是一一对应的
 
   /**
    * 分区可获取状态，满足的条件是副本处于 Fetching 状态且未被推迟执行
+   *
    * @return
    */
   def isReadyForFetch: Boolean = state == Fetching && !isDelayed
 
   /**
    * 副本处于 ISR 状态，满足条件是没有 lag
+   *
    * @return
    */
   def isReplicaInSync: Boolean = lag.isDefined && lag.get <= 0
 
   /**
    * 分区截断中状态，满足条件是副本处于 Truncating 状态且未被推迟执行
-   * 
+   *
    * 该方法常用于副本限流，比较少见
+   *
    * @return
    */
   def isTruncating: Boolean = state == Truncating && !isDelayed
 
   /**
    * 分区被推迟状态，满足的条件是存在未过期的延迟任务
-   * 
+   *
    * 该方法用于判断是否需要推迟获取对应分区的消息
+   *
    * @return
    */
   def isDelayed: Boolean = delay.exists(_.getDelay(TimeUnit.MILLISECONDS) > 0)
@@ -972,8 +1001,8 @@ case class PartitionFetchState(fetchOffset: Long,
 /**
  * OffsetTruncationState 类封装了一个位移值和一个截断完成与否的布尔值状态，
  * 它的主要作用是告诉 Kafka 要把指定分区下副本截断到哪个位移值。
- * @param offset
- * @param truncationCompleted
+ * @param offset 位移值
+ * @param truncationCompleted 截断是否完成
  */
 case class OffsetTruncationState(offset: Long, truncationCompleted: Boolean) {
 

@@ -143,6 +143,9 @@ public class FetchRequest extends AbstractRequest {
         return result;
     }
 
+    /**
+     * 构建 FetchRequest 请求对象的 Builder（建造者模式）
+     */
     public static class Builder extends AbstractRequest.Builder<FetchRequest> {
         private final int maxWait;
         private final int minBytes;

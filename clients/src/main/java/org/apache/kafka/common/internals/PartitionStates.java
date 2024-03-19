@@ -41,9 +41,11 @@ import java.util.function.BiConsumer;
  *
  * Note that this class is not thread-safe with the exception of {@link #size()} which returns the number of
  * partitions currently tracked.
+ *
+ * PartitionStates 在本质上会接收一组要读取的主题分区，然后以轮询的方式依次读取这些分区以确保公平性
  */
 public class PartitionStates<S> {
-
+    // 使用 LinkedHashMap 确保主题分区插入时的有序性
     private final LinkedHashMap<TopicPartition, S> map = new LinkedHashMap<>();
     private final Set<TopicPartition> partitionSetView = Collections.unmodifiableSet(map.keySet());
 
@@ -58,6 +60,12 @@ public class PartitionStates<S> {
             map.put(topicPartition, state);
     }
 
+    /**
+     * 保证读取主题分区时的公平性
+     * 读取分区：A、B、C、D，读取A之后，顺序调整为：B、C、D、A
+     * @param topicPartition 主题分区
+     * @param state 分区状态
+     */
     public void updateAndMoveToEnd(TopicPartition topicPartition, S state) {
         map.remove(topicPartition);
         map.put(topicPartition, state);
