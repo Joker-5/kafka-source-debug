@@ -313,7 +313,8 @@ class Log(@volatile private var _dir: File,
    * equals the log end offset (which may never happen for a partition under consistent load). This is needed to
    * prevent the log start offset (which is exposed in fetch responses) from getting ahead of the high watermark.
    */
-  // 分区日志高水位值
+  // 分区日志高水位值元数据，其初始值为 Log Start Offset
+  // 因为可能有多个线程同时读取高水位，因此需要将其设置为 volatile 的
   @volatile private var highWatermarkMetadata: LogOffsetMetadata = LogOffsetMetadata(logStartOffset)
 
   @volatile var partitionMetadataFile : PartitionMetadataFile = null
@@ -388,6 +389,7 @@ class Log(@volatile private var _dir: File,
       throw new KafkaStorageException(s"The memory mapped buffer for log of $topicPartition is already closed")
   }
 
+  // 高水位值，对应于一个指定的消息位移值
   def highWatermark: Long = highWatermarkMetadata.messageOffset
 
   /**
@@ -396,6 +398,10 @@ class Log(@volatile private var _dir: File,
    *
    * This is intended to be called when initializing the high watermark or when updating
    * it on a follower after receiving a Fetch response from the leader.
+   *
+   * 更新高水位值，该方法主要用在：
+   * 1、初始化高水位值
+   * 2、Follower 副本从 Leader 副本拉取到消息后
    *
    * @param hw the suggested new value for the high watermark
    * @return the updated high watermark offset
@@ -408,11 +414,14 @@ class Log(@volatile private var _dir: File,
    * Update high watermark with offset metadata. The new high watermark will be lower
    * bounded by the log start offset and upper bounded by the log end offset.
    *
+   * 更新高水位值
+   *
    * @param highWatermarkMetadata the suggested high watermark with offset metadata
    * @return the updated high watermark offset
    */
   def updateHighWatermark(highWatermarkMetadata: LogOffsetMetadata): Long = {
     val endOffsetMetadata = logEndOffsetMetadata
+    // 新的高水位值必须在 [LogStartOffset, LogEndOffset] 之间
     val newHighWatermarkMetadata = if (highWatermarkMetadata.messageOffset < logStartOffset) {
       LogOffsetMetadata(logStartOffset)
     } else if (highWatermarkMetadata.messageOffset >= endOffsetMetadata.messageOffset) {
@@ -420,8 +429,9 @@ class Log(@volatile private var _dir: File,
     } else {
       highWatermarkMetadata
     }
-
+    // 执行更新高水位的具体逻辑
     updateHighWatermarkMetadata(newHighWatermarkMetadata)
+    // 返回更新后的高水位值
     newHighWatermarkMetadata.messageOffset
   }
 
@@ -432,21 +442,32 @@ class Log(@volatile private var _dir: File,
    * This method is intended to be used by the leader to update the high watermark after follower
    * fetch offsets have been updated.
    *
+   * 可能更新高水位值，该方法主要用在更新 Leader 副本的高水位值的场景。
+   * 之所以是「可能」更新高水位值，是因为 Producer 向 Leader 副本写入消息时，Leader 副本可能需要等待其他 Follower 副本同步的进度
+   *
    * @return the old high watermark, if updated by the new value
    */
   def maybeIncrementHighWatermark(newHighWatermark: LogOffsetMetadata): Option[LogOffsetMetadata] = {
+    // 新的高水位值不能 > LEO 值
     if (newHighWatermark.messageOffset > logEndOffset)
       throw new IllegalArgumentException(s"High watermark $newHighWatermark update exceeds current " +
         s"log end offset $logEndOffsetMetadata")
 
+    // 加锁，避免 Log 对象并发更新的问题
     lock.synchronized {
+      // 获取老的高水位值
       val oldHighWatermark = fetchHighWatermarkMetadata
 
       // Ensure that the high watermark increases monotonically. We also update the high watermark when the new
       // offset metadata is on a newer segment, which occurs whenever the log is rolled to a new segment.
+      // 如果满足以下两个条件中的任一项，则会触发高水位的更新，这是为了保证高水位增长时的单调性：
+      // 1、新的高水位需要比老的高水位值要大
+      // 2、新老高水位值相同，但新的高水位在更新的 LogSegment 上
       if (oldHighWatermark.messageOffset < newHighWatermark.messageOffset ||
         (oldHighWatermark.messageOffset == newHighWatermark.messageOffset && oldHighWatermark.onOlderSegment(newHighWatermark))) {
+        // 更新高水位
         updateHighWatermarkMetadata(newHighWatermark)
+        // 返回老的高水位值
         Some(oldHighWatermark)
       } else {
         None
@@ -457,33 +478,49 @@ class Log(@volatile private var _dir: File,
   /**
    * Get the offset and metadata for the current high watermark. If offset metadata is not
    * known, this will do a lookup in the index and cache the result.
+   *
+   * 获取高水位元数据信息
+   *
+   * @return
    */
   private def fetchHighWatermarkMetadata: LogOffsetMetadata = {
+    // 读取时确保日志不被关闭
     checkIfMemoryMappedBufferClosed()
 
     val offsetMetadata = highWatermarkMetadata
+    // 没有获取到完整的元数据信息
     if (offsetMetadata.messageOffsetOnly) {
       lock.synchronized {
+        // 通过读日志文件的方式把完整的高水位元数据信息拉取出来
         val fullOffset = convertToOffsetMetadataOrThrow(highWatermark)
+        // 更新高水位元数据信息
         updateHighWatermarkMetadata(fullOffset)
         fullOffset
       }
+    // 可以获取到，直接返回
     } else {
       offsetMetadata
     }
   }
 
+  /**
+   * 更新高水位值
+   * @param newHighWatermark
+   */
   private def updateHighWatermarkMetadata(newHighWatermark: LogOffsetMetadata): Unit = {
     if (newHighWatermark.messageOffset < 0)
       throw new IllegalArgumentException("High watermark offset should be non-negative")
 
+    // 加锁，避免并发更新 Log 对象的问题
     lock synchronized {
       if (newHighWatermark.messageOffset < highWatermarkMetadata.messageOffset) {
         warn(s"Non-monotonic update of high watermark from $highWatermarkMetadata to $newHighWatermark")
       }
 
       highWatermarkMetadata = newHighWatermark
+      // 处理事务状态管理器的高水位值更新逻辑
       producerStateManager.onHighWatermarkUpdated(newHighWatermark.messageOffset)
+      // Kafka 事务机制相关处理（First Unstable Offset）
       maybeIncrementFirstUnstableOffset()
     }
     trace(s"Setting high watermark $newHighWatermark")
@@ -1592,6 +1629,7 @@ class Log(@volatile private var _dir: File,
 
   /**
    * The offset of the next message that will be appended to the log
+   * LEO，定义下一条待写入消息的位移值
    */
   def logEndOffset: Long = nextOffsetMetadata.messageOffset
 
@@ -2062,7 +2100,9 @@ object Log extends Logging {
   // 用于变更主题分区文件夹地址，属于高阶用法  
   val FutureDirSuffix = "-future"
 
+  // 正则规则：任意非空白字符-任意非空白字符.任意非空白字符-delete
   private[log] val DeleteDirPattern = Pattern.compile(s"^(\\S+)-(\\S+)\\.(\\S+)$DeleteDirSuffix")
+  // 正则规则：任意非空白字符-任意非空白字符.任意非空白字符-future
   private[log] val FutureDirPattern = Pattern.compile(s"^(\\S+)-(\\S+)\\.(\\S+)$FutureDirSuffix")
 
   val UnknownOffset = -1L
@@ -2093,7 +2133,7 @@ object Log extends Logging {
       logDirFailureChannel,
       config.recordVersion,
       s"[Log partition=$topicPartition, dir=${dir.getParent}] ")
-    val producerStateManager = new ProducerStateManager(topicPartition, dir, maxProducerIdExpirationMs, time)、
+    val producerStateManager = new ProducerStateManager(topicPartition, dir, maxProducerIdExpirationMs, time)
     // 加载所有日志段对象
     val offsets = LogLoader.load(LoadLogParams(
       dir,
