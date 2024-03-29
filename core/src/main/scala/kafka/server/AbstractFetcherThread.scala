@@ -50,13 +50,13 @@ import scala.math._
  * Abstract class for fetching data from multiple partitions from the same broker.
  * 
  * 
- * @param name 线程名
- * @param clientId 
- * @param sourceBroker 源 Broker 节点信息
- * @param failedPartitions
+ * @param name 线程名称
+ * @param clientId 客户端ID（对于 Follower 副本而言，该值就是线程的名称）
+ * @param sourceBroker 源 Broker 节点信息，定义从哪个 Broker 上读取数据
+ * @param failedPartitions 线程处理过程中报错的分区集合，用于计算特定的统计指标
  * @param fetchBackOffMs 获取分区数据出错后的等待重试间隔，默认是 replica.fetch.backoff.ms 参数值
- * @param isInterruptible
- * @param brokerTopicStats Broker 端主题的各类监控指标
+ * @param isInterruptible 线程关闭时是否允许中断该线程（对于 Follower 副本而言，它创建的 ReplicaFetcherThread 线程是不可中断的）
+ * @param brokerTopicStats Broker 端主题的各类监控指标，常见的有 MessagesInPerSec、BytesInPerSec 等
  */
 abstract class AbstractFetcherThread(name: String,
                                      clientId: String,
@@ -186,10 +186,16 @@ abstract class AbstractFetcherThread(name: String,
     }
   }
 
-  // deal with partitions with errors, potentially due to leadership changes
+  /**
+   * deal with partitions with errors, potentially due to leadership changes
+   *
+   * @param partitions 出错的分区
+   * @param methodName 出错的对应方法名称
+   */
   private def handlePartitionsWithErrors(partitions: Iterable[TopicPartition], methodName: String): Unit = {
     if (partitions.nonEmpty) {
       debug(s"Handling errors in $methodName for partitions $partitions")
+      // 执行分区延迟重试
       delayPartitions(partitions, fetchBackOffMs)
     }
   }
@@ -782,8 +788,11 @@ abstract class AbstractFetcherThread(name: String,
     partitionMapLock.lockInterruptibly()
     try {
       for (partition <- partitions) {
+        // 获取分区对应的分区状态
         Option(partitionStates.stateValue(partition)).foreach { currentFetchState =>
+          // 如果分区状态不是延迟处理
           if (!currentFetchState.isDelayed) {
+            // 将分区放入集合末尾，实现延时重试
             partitionStates.updateAndMoveToEnd(partition, PartitionFetchState(currentFetchState.fetchOffset,
               currentFetchState.lag, currentFetchState.currentLeaderEpoch, Some(new DelayedItem(delay)),
               currentFetchState.state, currentFetchState.lastFetchedEpoch))

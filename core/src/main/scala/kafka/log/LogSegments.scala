@@ -34,7 +34,13 @@ import scala.jdk.CollectionConverters._
  */
 class LogSegments(topicPartition: TopicPartition) {
 
-  /* the segments of the log with key being LogSegment base offset and value being a LogSegment */
+  /** the segments of the log with key being LogSegment base offset and value being a LogSegment
+   *
+   * 使用 ConcurrentSkipListMap 来管理 LogSegment，结构为[K:LogSegment 的起始位移值, V:LogSegment 对象]
+   * 使用这种容器有两点好处：
+   * 1、线程安全。
+   * 2、Key 支持排序。这样 Kafka 可以很方便的根据 LogSegment 的 base offset 来进行排序和比较。同时还可以快速定位到与给定 offset 相近的前后两个 LogSegment
+   */
   private val segments: ConcurrentNavigableMap[Long, LogSegment] = new ConcurrentSkipListMap[Long, LogSegment]
 
   /**
@@ -52,10 +58,12 @@ class LogSegments(topicPartition: TopicPartition) {
   /**
    * Add the given segment, or replace an existing entry.
    *
+   * 添加 LogSegment 对象
+   *
    * @param segment the segment to add
    */
   @threadsafe
-  def add(segment: LogSegment): LogSegment = this.segments.put(segment.baseOffset, segment)
+  def add(segment: LogSegment): LogSegment = this.segments.put(segment.baseOffset, segment) // 调 API 的 put 方法
 
   /**
    * Remove the segment at the provided offset.
@@ -152,6 +160,8 @@ class LogSegments(topicPartition: TopicPartition) {
   }
 
   /**
+   * 获得最后一个起始位移值 <= 给定 Key 的 LogSegment 对象
+   *
    * @return the entry associated with the greatest offset less than or equal to the given offset,
    *         if it exists.
    */
@@ -180,6 +190,8 @@ class LogSegments(topicPartition: TopicPartition) {
   def lowerSegment(offset: Long): Option[LogSegment] = lowerEntry(offset).map(_.getValue)
 
   /**
+   * 获得第一个起始位移值 >= 给定 Key 的 LogSegment 对象
+   *
    * @return the entry associated with the smallest offset strictly greater than the given offset,
    *         if it exists.
    */
@@ -194,7 +206,10 @@ class LogSegments(topicPartition: TopicPartition) {
   def higherSegment(offset: Long): Option[LogSegment]  = higherEntry(offset).map(_.getValue)
 
   /**
+   * 获取第一个 LogSegment 对象
+   *
    * @return the entry associated with the smallest offset, if it exists.
+   *
    */
   @threadsafe
   def firstEntry: Option[Map.Entry[Long, LogSegment]] = Option(segments.firstEntry)
@@ -206,6 +221,8 @@ class LogSegments(topicPartition: TopicPartition) {
   def firstSegment: Option[LogSegment] = firstEntry.map(_.getValue)
 
   /**
+   * 获取最后一个 LogSegment 对象，即 Active Segment
+   *
    * @return the entry associated with the greatest offset, if it exists.
    */
   @threadsafe
