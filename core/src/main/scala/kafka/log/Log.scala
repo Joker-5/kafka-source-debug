@@ -1334,10 +1334,16 @@ class Log(@volatile private var _dir: File,
   /**
    * Read messages from the log.
    *
+   * 日志读操作具体实现
+   *
    * @param startOffset The offset to begin reading at
+   *                    读消息的起始位移
    * @param maxLength The maximum number of bytes to read
+   *                  最多能读取多少字节
    * @param isolation The fetch isolation, which controls the maximum offset we are allowed to read
+   *                  读取时的隔离级别，主要控制能够读取的最大位移值，多用于 Kafka 事务
    * @param minOneMessage If this is true, the first message will be returned even if it exceeds `maxLength` (if one exists)
+   *                      是否允许至少读取一条消息，如果该参数置为 true，即便消息超过 maxLength 的限制，仍会至少返回一条消息
    * @throws OffsetOutOfRangeException If startOffset is beyond the log end offset or before the log start offset
    * @return The fetch data information including fetch starting offset metadata and messages read.
    */
@@ -1353,30 +1359,45 @@ class Log(@volatile private var _dir: File,
 
       // Because we don't use the lock for reading, the synchronization is a little bit tricky.
       // We create the local variables to avoid race conditions with updates to the log.
+      // 注意，读取消息的时候并没有加锁！这里是通过使用本地变量保存 LEO 这种比较 trick 的方式来避免并发时的竞态条件的
       val endOffsetMetadata = nextOffsetMetadata
       val endOffset = endOffsetMetadata.messageOffset
+      // 找到起始位移所在的 LogSegment，注意使用的是 floor 方法( <= startOffset 的最大值)
       var segmentOpt = segments.floorSegment(startOffset)
 
       // return error on attempt to read beyond the log end offset or read below log start offset
+      // 读取消息越界，抛异常。
+      // 以下 3 种情况均表示消息越界：
+      // 1、读取消息超过了 LEO
+      // 2、没找到起始位移所在的 LogSegment
+      // 3、起始位移 < 消息可见范围(Log Start Offset)
       if (startOffset > endOffset || segmentOpt.isEmpty || startOffset < logStartOffset)
         throw new OffsetOutOfRangeException(s"Received request for offset $startOffset for partition $topicPartition, " +
           s"but we only have log segments in the range $logStartOffset to $endOffset.")
 
+      // 根据消息的读隔离级别设置消息读取的上界
       val maxOffsetMetadata = isolation match {
+        // Follower 副本消费者的消息可见范围：[Log Start Offset, LEO)
         case FetchLogEnd => endOffsetMetadata
+        // 普通消费者的消息可见范围：[Log Start Offset, HW)
         case FetchHighWatermark => fetchHighWatermarkMetadata
+        // 事务型消费者的消息可见范围：[Log Start Offset, LSO]
         case FetchTxnCommitted => fetchLastStableOffsetMetadata
       }
 
+      // 消息读取的起始位移 = 读取消息的上界，返回空结果
       if (startOffset == maxOffsetMetadata.messageOffset)
         emptyFetchDataInfo(maxOffsetMetadata, includeAbortedTxns)
+      // 消息读取的起始位移 > 读取消息的上界，返回空结果
       else if (startOffset > maxOffsetMetadata.messageOffset)
         emptyFetchDataInfo(convertToOffsetMetadataOrThrow(startOffset), includeAbortedTxns)
+      // 否则，执行消息读取逻辑
       else {
         // Do the read on the segment with a base offset less than the target offset
         // but if that segment doesn't contain any messages with an offset greater than that
         // continue to read from successive segments until we get some messages or we reach the end of the log
         var fetchDataInfo: FetchDataInfo = null
+        // 开始遍历 LogSegment 对象，直到读取到结果或者读取到消息末尾
         while (fetchDataInfo == null && segmentOpt.isDefined) {
           val segment = segmentOpt.get
           val baseOffset = segment.baseOffset
@@ -1386,14 +1407,17 @@ class Log(@volatile private var _dir: File,
             if (maxOffsetMetadata.segmentBaseOffset == segment.baseOffset) maxOffsetMetadata.relativePositionInSegment
             else segment.size
 
+          // 执行底层消息读取逻辑
           fetchDataInfo = segment.read(startOffset, maxLength, maxPosition, minOneMessage)
-          if (fetchDataInfo != null) {
+          if (fetchDataInfo != null) { // 读取到结果后，循环流程就会中断
             if (includeAbortedTxns)
               fetchDataInfo = addAbortedTransactions(startOffset, segment, fetchDataInfo)
-          } else segmentOpt = segments.higherSegment(baseOffset)
+          } else segmentOpt = segments.higherSegment(baseOffset) // 没有读取到，去下一个 LogSegment 种尝试继续读取
         }
 
+        // 读取到消息结果，返回
         if (fetchDataInfo != null) fetchDataInfo
+        // 读取到日志末尾还是没有读取到任何消息，返回空消息集合。这种 case 可能是所有 > 起始位移的消息被删除所导致的
         else {
           // okay we are beyond the end of the last segment with no data fetched although the start offset is in range,
           // this can happen when all messages with offset larger than start offsets have been deleted.
