@@ -27,6 +27,7 @@ sealed abstract class ControllerState {
 
   // 用于构造 Controller 状态速率的监控指标名称
   def rateAndTimeMetricName: Option[String] =
+    // 指标名称命名规则：事件名称RateAndTimeMs，比如 IsrChangeNotificationRateAndTimeMs
     if (hasRateAndTimeMetric) Some(s"${toString}RateAndTimeMs") else None
 
   protected def hasRateAndTimeMetric: Boolean = true

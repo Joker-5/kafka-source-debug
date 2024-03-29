@@ -659,20 +659,31 @@ class KafkaController(val config: KafkaConfig,
 
   /**
    * 为已关闭 Broker 做最后的清扫工作
+   *
    * @param deadBrokers 已终止运行的 Broker Id 列表
    */
   private def onBrokerFailure(deadBrokers: Seq[Int]): Unit = {
     info(s"Broker failure callback for ${deadBrokers.mkString(",")}")
-    // 更新 Controller 元数据信息，将指定 Broker 从元数据 replicasOnOfflineDirs 中移除
+    // 将这些 Broker 从元数据 replicasOnOfflineDirs 中移除
     deadBrokers.foreach(controllerContext.replicasOnOfflineDirs.remove)
-    // 找到这些 Broker 上的所有副本对象，并从元数据中删除
+
+    // 将这些 Broker 从元数据 shuttingDownBrokerIds 中删除，并拿到这些 BrokerId（拿到后仅用于打印日志）
     val deadBrokersThatWereShuttingDown =
       deadBrokers.filter(id => controllerContext.shuttingDownBrokerIds.remove(id))
+
     if (deadBrokersThatWereShuttingDown.nonEmpty)
       info(s"Removed ${deadBrokersThatWereShuttingDown.mkString(",")} from list of shutting down brokers.")
-    // 执行副本清扫工作，找到待移除 Broker 上的所有副本对象，将他们设置为 Offline 状态
+
+    // 获取已关闭 Broker 中的所有副本
     val allReplicasOnDeadBrokers = controllerContext.replicasOnBrokers(deadBrokers.toSet)
+
+    // 执行副本清扫工作，主要依赖于分区状态机和副本状态机来完成相应处理。
+    // 这个方法主要做了 3 件事：
+    // 1、
+    // 2、
+    // 3、
     onReplicasBecomeOffline(allReplicasOnDeadBrokers)
+
     // 取消这些 Broker 上注册的 ZK 监听器 BrokerModificationsHandler
     unregisterBrokerModificationsHandler(deadBrokers)
   }
@@ -2814,10 +2825,12 @@ case class LeaderIsrAndControllerEpoch(leaderAndIsr: LeaderAndIsr, controllerEpo
 // 用于表示 Controller 的一些统计信息
 private[controller] class ControllerStats extends KafkaMetricsGroup {
   // 统计每秒发生的 Unclean Leader 选举次数
+  // 如果启用了 Unclean Leader 选举，就必须关注这个指标的值，如果该指标值过高，数据丢失的风险就会非常大
   val uncleanLeaderElectionRate = newMeter("UncleanLeaderElectionsPerSec", "elections", TimeUnit.SECONDS)
 
-  // Controller 事件通用的统计速率指标的方法
+  // Controller 事件通用的统计速率、时间指标
   val rateAndTimeMetrics: Map[ControllerState, KafkaTimer] = ControllerState.values.flatMap { state =>
+    // 指标名称命名规则：事件名称RateAndTimeMs，比如 IsrChangeNotificationRateAndTimeMs
     state.rateAndTimeMetricName.map { metricName =>
       state -> new KafkaTimer(newTimer(metricName, TimeUnit.MILLISECONDS, TimeUnit.SECONDS))
     }
